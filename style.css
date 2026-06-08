@@ -709,6 +709,141 @@ body {
   border-color: var(--accent-color);
 }
 
+/* --- FLOORS, DOORS & NAVIGATION STYLING --- */
+
+/* Floating Floor Selector widget */
+.floor-selector {
+  position: absolute;
+  right: 20px;
+  top: 45%;
+  transform: translateY(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-color);
+  padding: 8px 6px;
+  border-radius: 12px;
+  z-index: 1000;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5);
+  align-items: center;
+  backdrop-filter: blur(16px);
+  width: 48px;
+}
+
+.floor-selector-label {
+  font-size: 0.55rem;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  font-weight: 700;
+  margin-bottom: 4px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.floor-btn {
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+}
+
+.floor-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-primary);
+}
+
+.floor-btn.active {
+  background: var(--warning);
+  color: #0f0f11;
+  border-color: var(--warning);
+  box-shadow: 0 0 10px rgba(245, 158, 11, 0.4);
+}
+
+/* Custom styled Leaflet drawing paths for Boundary */
+.leaflet-interactive.drawn-boundary-polygon {
+  stroke: var(--warning);
+  stroke-width: 2.5;
+  stroke-dasharray: 6 6;
+  fill: var(--warning);
+  fill-opacity: 0.03;
+}
+
+/* Custom styled Leaflet drawing paths for Doors */
+.drawn-door-icon {
+  background: var(--success);
+  border: 2px solid #0f0f11;
+  border-radius: 50%;
+  box-shadow: 0 0 8px rgba(16, 185, 129, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  transition: all 0.2s ease;
+}
+
+.drawn-door-icon:hover {
+  transform: scale(1.2);
+  box-shadow: 0 0 12px rgba(16, 185, 129, 0.9);
+}
+
+.drawn-door-icon i {
+  font-size: 0.6rem;
+}
+
+/* Navigation Path */
+.leaflet-interactive.navigation-path {
+  stroke: #10b981; /* neon emerald */
+  stroke-width: 5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  fill: none;
+  filter: drop-shadow(0 0 6px rgba(16, 185, 129, 0.8));
+  stroke-dasharray: 12 12;
+  animation: nav-path-flow 1.5s linear infinite;
+}
+
+@keyframes nav-path-flow {
+  from {
+    stroke-dashoffset: 24;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+/* Modal Door Section */
+.door-status-pill {
+  font-size: 0.75rem;
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-weight: 600;
+  transition: all 0.2s;
+}
+
+.door-status-pill.empty {
+  background: rgba(239, 68, 68, 0.15);
+  color: var(--danger);
+  border: 1px solid rgba(239, 68, 68, 0.25);
+}
+
+.door-status-pill.filled {
+  background: rgba(16, 185, 129, 0.15);
+  color: var(--success);
+  border: 1px solid rgba(16, 185, 129, 0.25);
+}
+
 /* --- SUPER MOBILE RESPONSIVENESS --- */
 @media (max-width: 768px) {
   body {

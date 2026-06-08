@@ -12,7 +12,7 @@ let osmLayer;
 let activeTileStyle = 'google-hybrid';
 
 // Drawing Editor State
-let activeTool = 'select'; // 'select', 'room', 'wall', 'window', 'delete'
+let activeTool = 'select'; // 'select', 'boundary', 'room', 'wall', 'window', 'door', 'delete'
 let isSimulatorEnabled = false;
 let currentGpsCoords = { lat: 37.4220, lng: -122.0841 }; // Default Googleplex coords
 let activeRoomId = null;
@@ -22,22 +22,31 @@ let tempPoints = [];
 let tempGraphic = null; // Temporary line/polygon drawn on click
 
 // Saved features collections
+let savedBoundaries = [];
 let savedRooms = [];
 let savedWalls = [];
 let savedWindows = [];
+let savedDoors = [];
+let activeFloor = '1';
 
 // Leaflet Layer groups to host vectors on map
+let boundariesLayerGroup;
 let roomsLayerGroup;
 let wallsLayerGroup;
 let windowsLayerGroup;
+let doorsLayerGroup;
 let userGpsMarker = null;
 let gpsAccuracyCircle = null;
+let navigationPathPolyline = null;
+
 let lastGpsCoords = null; // For GPS smoothing
 let lastGpsAccuracy = null; // Track accuracy changes
 const smoothingFactor = 0.45; // Weight of new coordinate (0.0 - 1.0)
 
 // Temporary polygon storage when waiting for modal save
 let pendingRoomCoords = null;
+let isPlacingDoorForModal = false;
+let tempDoorsForModal = [];
 
 // --- DOM Elements ---
 const btnFindMe = document.getElementById('btn-find-me');
@@ -55,6 +64,9 @@ const savedRoomsList = document.getElementById('saved-rooms-list');
 const roomModal = document.getElementById('room-modal');
 const roomNameInput = document.getElementById('room-name-input');
 const roomCategorySelect = document.getElementById('room-category-select');
+const roomFloorSelect = document.getElementById('room-floor-select');
+const modalDoorStatus = document.getElementById('modal-door-status');
+const btnModalAddDoor = document.getElementById('btn-modal-add-door');
 const roomDescInput = document.getElementById('room-desc-input');
 const btnModalSave = document.getElementById('btn-modal-save');
 const btnModalCancel = document.getElementById('btn-modal-cancel');
@@ -65,19 +77,31 @@ const successOverlay = document.getElementById('success-overlay');
 const successRoomName = document.getElementById('success-room-name');
 const btnSuccessClose = document.getElementById('btn-success-close');
 
+// Navigation Elements
+const navStartSelect = document.getElementById('nav-start');
+const navEndSelect = document.getElementById('nav-end');
+const btnFindPath = document.getElementById('btn-find-path');
+const btnClearPath = document.getElementById('btn-clear-path');
+
 const toolButtons = {
   select: document.getElementById('tool-select'),
+  boundary: document.getElementById('tool-boundary'),
   room: document.getElementById('tool-room'),
   wall: document.getElementById('tool-wall'),
   window: document.getElementById('tool-window'),
+  door: document.getElementById('tool-door'),
   delete: document.getElementById('tool-delete')
 };
+
+// --- Panel Elements for responsive height shifts ---
+const searchPanel = document.querySelector('.search-panel');
 
 // --- Initialization ---
 document.addEventListener('DOMContentLoaded', () => {
   initMap();
   loadFeaturesFromLocalStorage();
   setupUIEventListeners();
+  switchActiveFloor('1');
   locateUser(true); // Center on startup
 });
 
@@ -119,9 +143,11 @@ function initMap() {
   L.control.zoom({ position: 'bottomright' }).addTo(map);
 
   // Create vector rendering groups
+  boundariesLayerGroup = L.layerGroup().addTo(map);
   roomsLayerGroup = L.layerGroup().addTo(map);
   wallsLayerGroup = L.layerGroup().addTo(map);
   windowsLayerGroup = L.layerGroup().addTo(map);
+  doorsLayerGroup = L.layerGroup().addTo(map);
 
   // Marker representing the user/GPS location
   userGpsMarker = L.marker([currentGpsCoords.lat, currentGpsCoords.lng], {
@@ -211,7 +237,8 @@ function updateGpsLocation(lat, lng, accuracy = null) {
 function checkIndoorProximity(lat, lng) {
   let containingRoom = null;
 
-  for (const room of savedRooms) {
+  const roomsOnFloor = savedRooms.filter(r => r.floor === activeFloor);
+  for (const room of roomsOnFloor) {
     if (isPointInPolygon([lat, lng], room.latlngs)) {
       containingRoom = room;
       break;
@@ -384,6 +411,27 @@ function setupUIEventListeners() {
   btnModalCancel.addEventListener('click', closeModal);
   btnModalClose.addEventListener('click', closeModal);
 
+  // Floor selector buttons
+  const floorButtons = document.querySelectorAll('.floor-btn');
+  floorButtons.forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      floorButtons.forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      switchActiveFloor(btn.dataset.floor);
+    });
+  });
+
+  // Modal Add Door button
+  btnModalAddDoor.addEventListener('click', () => {
+    isPlacingDoorForModal = true;
+    roomModal.style.display = 'none'; // Temporarily hide modal
+    showToast('Click on the map/room outline to place a door.');
+  });
+
+  // Navigation Pathfinding buttons
+  btnFindPath.addEventListener('click', calculateAndDrawPath);
+  btnClearPath.addEventListener('click', clearNavigationPath);
+
   // Map drawing clicks listeners
   map.on('click', handleMapClick);
   map.on('mousemove', handleMapMouseMove);
@@ -426,11 +474,12 @@ function swapTileStyle(style) {
 }
 
 function updateFooterHint() {
-  const directory = document.getElementById('rooms-list-container');
-  // Just updates title tags or displays toast hints
   switch (activeTool) {
     case 'select':
       showToast('Mode: Inspect items and listings.');
+      break;
+    case 'boundary':
+      showToast('Mode: Click points to draw Floor Boundary. Double-click to close.');
       break;
     case 'room':
       showToast('Mode: Click points to draw corners. Double-click to close.');
@@ -441,6 +490,9 @@ function updateFooterHint() {
     case 'window':
       showToast('Mode: Click points. Double-click to finish drawing window.');
       break;
+    case 'door':
+      showToast('Mode: Click near a room boundary to place a door.');
+      break;
     case 'delete':
       showToast('Mode: Click on any drawn vector to delete it.');
       break;
@@ -449,34 +501,85 @@ function updateFooterHint() {
 
 // --- Map Drawing Core Engine ---
 function handleMapClick(e) {
+  // If placing door for modal, handle it
+  if (isPlacingDoorForModal) {
+    const pt = [e.latlng.lat, e.latlng.lng];
+    tempDoorsForModal.push(pt);
+    
+    // Draw temporary door marker
+    const tempMarker = L.marker(pt, {
+      icon: L.divIcon({
+        html: '<div class="drawn-door-icon"><i class="fa-solid fa-door-open"></i></div>',
+        className: 'custom-door-divicon',
+        iconSize: [20, 20],
+        iconAnchor: [10, 10]
+      })
+    }).addTo(doorsLayerGroup);
+    
+    isPlacingDoorForModal = false;
+    
+    // Update Modal UI
+    modalDoorStatus.textContent = `${tempDoorsForModal.length} Door(s) Placed`;
+    modalDoorStatus.className = 'door-status-pill filled';
+    
+    // Re-show modal
+    roomModal.style.display = 'flex';
+    showToast('Door placed.');
+    return;
+  }
+
   // If Simulator is active and Select mode, move user position
   if (isSimulatorEnabled && activeTool === 'select') {
     updateGpsLocation(e.latlng.lat, e.latlng.lng);
     return;
   }
 
-  // Draw modes
-  if (activeTool === 'room' || activeTool === 'wall' || activeTool === 'window') {
+  // If Door placing tool is active directly
+  if (activeTool === 'door') {
+    const pt = [e.latlng.lat, e.latlng.lng];
+    const associatedRoom = findClosestRoom(pt);
+    if (!associatedRoom) {
+      showToast('Please draw a room on this floor first before placing a door!');
+      return;
+    }
+    
+    const door = {
+      id: 'door-' + Date.now(),
+      roomId: associatedRoom.id,
+      floor: activeFloor,
+      latlng: pt
+    };
+    
+    savedDoors.push(door);
+    renderDoor(door);
+    saveFeaturesToLocalStorage();
+    showToast(`Door associated with ${associatedRoom.name}.`);
+    
+    // Refresh Navigation options since a new door was placed
+    updateNavigationRoomOptions();
+    return;
+  }
+
+  // Draw modes (Room, Wall, Window, Boundary)
+  if (activeTool === 'room' || activeTool === 'wall' || activeTool === 'window' || activeTool === 'boundary') {
     const pt = [e.latlng.lat, e.latlng.lng];
     tempPoints.push(pt);
     
     // Draw/Update temporary graphics
     if (tempPoints.length === 1) {
-      // First point placed
-      if (activeTool === 'room') {
-        tempGraphic = L.polygon(tempPoints, { color: 'var(--accent-color)', weight: 2, fillOpacity: 0.1, dashArray: '5 5' }).addTo(map);
+      if (activeTool === 'room' || activeTool === 'boundary') {
+        const color = activeTool === 'boundary' ? 'var(--warning)' : 'var(--accent-color)';
+        tempGraphic = L.polygon(tempPoints, { color: color, weight: 2, fillOpacity: 0.1, dashArray: '5 5' }).addTo(map);
       } else {
         tempGraphic = L.polyline(tempPoints, { color: activeTool === 'window' ? '#67e8f9' : '#4b5563', weight: 3, dashArray: '5 5' }).addTo(map);
       }
     } else {
-      // Add point to path
       tempGraphic.setLatLngs(tempPoints);
     }
   }
 }
 
 function handleMapMouseMove(e) {
-  // Guide line drawing on cursor move
   if (tempGraphic && tempPoints.length > 0) {
     const pts = [...tempPoints, [e.latlng.lat, e.latlng.lng]];
     tempGraphic.setLatLngs(pts);
@@ -484,8 +587,7 @@ function handleMapMouseMove(e) {
 }
 
 function handleMapDoubleClick(e) {
-  // Prevent zoom on double click when drawing
-  if (activeTool === 'room' || activeTool === 'wall' || activeTool === 'window') {
+  if (activeTool === 'room' || activeTool === 'wall' || activeTool === 'window' || activeTool === 'boundary') {
     L.DomEvent.stopPropagation(e);
 
     if (tempPoints.length < 2) {
@@ -493,13 +595,15 @@ function handleMapDoubleClick(e) {
       return;
     }
 
-    const tool = activeTool; // Capture active tool
-    const pts = [...tempPoints]; // copy points
+    const tool = activeTool;
+    const pts = [...tempPoints];
     resetDraftState();
 
     if (tool === 'room') {
       pendingRoomCoords = pts;
       openModal();
+    } else if (tool === 'boundary') {
+      saveBoundary(pts);
     } else if (tool === 'wall') {
       saveWall(pts);
     } else if (tool === 'window') {
@@ -567,25 +671,60 @@ function savePendingRoom() {
   const name = roomNameInput.value.trim();
   const cat = roomCategorySelect.value;
   const desc = roomDescInput.value.trim();
+  const floor = roomFloorSelect.value;
 
   if (!name) {
     alert('Please enter a room name.');
     return;
   }
 
+  if (tempDoorsForModal.length === 0) {
+    alert('Every room must have at least one door to enable navigation. Please place a door.');
+    return;
+  }
+
+  const roomId = 'room-' + Date.now();
   const room = {
-    id: 'room-' + Date.now(),
+    id: roomId,
     name: name,
     category: cat,
+    floor: floor,
     desc: desc || 'No notes saved.',
     latlngs: pendingRoomCoords
   };
 
+  // Move temporary doors into savedDoors
+  tempDoorsForModal.forEach((pt, index) => {
+    savedDoors.push({
+      id: `door-${Date.now()}-${index}`,
+      roomId: roomId,
+      floor: floor,
+      latlng: pt
+    });
+  });
+
   savedRooms.push(room);
-  renderRoom(room);
-  saveFeaturesToLocalStorage();
-  updateRoomDirectoryUI();
   
+  // Clear temp list
+  tempDoorsForModal = [];
+  modalDoorStatus.textContent = "0 Doors Placed";
+  modalDoorStatus.className = "door-status-pill empty";
+
+  saveFeaturesToLocalStorage();
+  
+  // Redraw everything to ensure consistency
+  switchActiveFloor(floor);
+
+  // Sync Floor Selector UI
+  const floorButtons = document.querySelectorAll('.floor-btn');
+  floorButtons.forEach(btn => {
+    if (btn.dataset.floor === floor) {
+      btn.classList.add('active');
+    } else {
+      btn.classList.remove('active');
+    }
+  });
+
   // Re-check coordinates immediately in case user is currently inside it
   checkIndoorProximity(currentGpsCoords.lat, currentGpsCoords.lng);
 
@@ -636,12 +775,8 @@ function handleFeatureClick(e, id, type) {
 function deleteFeature(id, type) {
   if (type === 'room') {
     savedRooms = savedRooms.filter(r => r.id !== id);
-    roomsLayerGroup.eachLayer(layer => {
-      if (layer.dataset && layer.dataset.id === id) {
-        roomsLayerGroup.removeLayer(layer);
-      }
-    });
-    updateRoomDirectoryUI();
+    // Delete associated doors
+    savedDoors = savedDoors.filter(d => d.roomId !== id);
     
     // Clear active containment state
     if (activeRoomId === id) {
@@ -650,23 +785,18 @@ function deleteFeature(id, type) {
       valCurrentRoom.className = 'current-room-pill outside';
       successOverlay.classList.remove('show');
     }
+  } else if (type === 'boundary') {
+    savedBoundaries = savedBoundaries.filter(b => b.id !== id);
   } else if (type === 'wall') {
     savedWalls = savedWalls.filter(w => w.id !== id);
-    wallsLayerGroup.eachLayer(layer => {
-      if (layer.dataset && layer.dataset.id === id) {
-        wallsLayerGroup.removeLayer(layer);
-      }
-    });
   } else if (type === 'window') {
     savedWindows = savedWindows.filter(w => w.id !== id);
-    windowsLayerGroup.eachLayer(layer => {
-      if (layer.dataset && layer.dataset.id === id) {
-        windowsLayerGroup.removeLayer(layer);
-      }
-    });
+  } else if (type === 'door') {
+    savedDoors = savedDoors.filter(d => d.id !== id);
   }
 
   saveFeaturesToLocalStorage();
+  switchActiveFloor(activeFloor); // Re-render active floor
   showToast('Feature removed.');
 }
 
@@ -679,9 +809,9 @@ function zoomToRoom(room) {
   L.popup()
     .setLatLng(polyBounds.getCenter())
     .setContent(`
-      <div style="color: var(--text-primary);">
+      <div style="color: var(--text-primary); font-family: 'Outfit', sans-serif;">
         <h3 style="margin-bottom: 4px; font-weight: 600;">${room.name}</h3>
-        <p style="font-size: 0.75rem; text-transform: uppercase; color: var(--accent-color); font-weight: 700; margin-bottom: 6px;">${room.category}</p>
+        <p style="font-size: 0.7rem; text-transform: uppercase; color: var(--accent-color); font-weight: 700; margin-bottom: 6px;">${room.category} • Floor ${room.floor}</p>
         <p style="font-size: 0.8rem; color: var(--text-secondary); line-height: 1.4;">${room.desc}</p>
       </div>
     `)
@@ -691,13 +821,14 @@ function zoomToRoom(room) {
 // --- Directory Update UI ---
 function updateRoomDirectoryUI() {
   savedRoomsList.innerHTML = '';
+  const roomsOnFloor = savedRooms.filter(r => r.floor === activeFloor);
   
-  if (savedRooms.length === 0) {
-    savedRoomsList.innerHTML = '<li class="empty-list-placeholder">No rooms drawn yet. Use the Drawing Tools above to map your building!</li>';
+  if (roomsOnFloor.length === 0) {
+    savedRoomsList.innerHTML = `<li class="empty-list-placeholder">No rooms mapped on Floor ${activeFloor} yet. Use the Drawing Tools above!</li>`;
     return;
   }
 
-  savedRooms.forEach(room => {
+  roomsOnFloor.forEach(room => {
     const item = document.createElement('li');
     item.className = 'room-dir-item';
     item.innerHTML = `
@@ -723,6 +854,10 @@ function openModal() {
   roomNameInput.value = '';
   roomDescInput.value = '';
   roomCategorySelect.value = 'other';
+  roomFloorSelect.value = activeFloor;
+  tempDoorsForModal = [];
+  modalDoorStatus.textContent = "0 Doors Placed";
+  modalDoorStatus.className = "door-status-pill empty";
   roomModal.style.display = 'flex';
   roomNameInput.focus();
 }
@@ -731,33 +866,40 @@ function closeModal() {
   roomModal.style.display = 'none';
   pendingRoomCoords = null;
   resetDraftState();
+
+  // Clear any temporary door markers placed while modal was active
+  doorsLayerGroup.eachLayer(layer => {
+    if (layer.dataset && layer.dataset.id && layer.dataset.id.startsWith('temp-')) {
+      doorsLayerGroup.removeLayer(layer);
+    }
+  });
+
+  tempDoorsForModal = [];
+  modalDoorStatus.textContent = "0 Doors Placed";
+  modalDoorStatus.className = "door-status-pill empty";
 }
 
 // --- LocalStorage Integration ---
 function saveFeaturesToLocalStorage() {
+  localStorage.setItem('mazemap_gps_boundaries', JSON.stringify(savedBoundaries));
   localStorage.setItem('mazemap_gps_rooms', JSON.stringify(savedRooms));
   localStorage.setItem('mazemap_gps_walls', JSON.stringify(savedWalls));
   localStorage.setItem('mazemap_gps_windows', JSON.stringify(savedWindows));
+  localStorage.setItem('mazemap_gps_doors', JSON.stringify(savedDoors));
 }
 
 function loadFeaturesFromLocalStorage() {
+  const boundariesStr = localStorage.getItem('mazemap_gps_boundaries');
   const roomsStr = localStorage.getItem('mazemap_gps_rooms');
   const wallsStr = localStorage.getItem('mazemap_gps_walls');
   const windowsStr = localStorage.getItem('mazemap_gps_windows');
+  const doorsStr = localStorage.getItem('mazemap_gps_doors');
 
-  if (roomsStr) {
-    savedRooms = JSON.parse(roomsStr);
-    savedRooms.forEach(renderRoom);
-    updateRoomDirectoryUI();
-  }
-  if (wallsStr) {
-    savedWalls = JSON.parse(wallsStr);
-    savedWalls.forEach(renderWall);
-  }
-  if (windowsStr) {
-    savedWindows = JSON.parse(windowsStr);
-    savedWindows.forEach(renderWindow);
-  }
+  if (boundariesStr) savedBoundaries = JSON.parse(boundariesStr);
+  if (roomsStr) savedRooms = JSON.parse(roomsStr);
+  if (wallsStr) savedWalls = JSON.parse(wallsStr);
+  if (windowsStr) savedWindows = JSON.parse(windowsStr);
+  if (doorsStr) savedDoors = JSON.parse(doorsStr);
 }
 
 // --- General Toast Notification system ---
@@ -770,3 +912,542 @@ function showToast(message) {
     toastElement.classList.remove('show');
   }, 2500);
 }
+
+// --- FLOORS, DOORS & NAVIGATION APP ENGINE ---
+
+function switchActiveFloor(floor) {
+  activeFloor = floor;
+  
+  // Clear map layers
+  boundariesLayerGroup.clearLayers();
+  roomsLayerGroup.clearLayers();
+  wallsLayerGroup.clearLayers();
+  windowsLayerGroup.clearLayers();
+  doorsLayerGroup.clearLayers();
+  
+  // Clear navigation path
+  clearNavigationPath();
+  
+  // Render features matching floor
+  savedBoundaries.filter(b => b.floor === activeFloor).forEach(renderBoundary);
+  savedRooms.filter(r => r.floor === activeFloor).forEach(renderRoom);
+  savedWalls.filter(w => w.floor === activeFloor).forEach(renderWall);
+  savedWindows.filter(w => w.floor === activeFloor).forEach(renderWindow);
+  savedDoors.filter(d => d.floor === activeFloor).forEach(renderDoor);
+  
+  // Update room directory UI
+  updateRoomDirectoryUI();
+  
+  // Update dropdown select menus
+  updateNavigationRoomOptions();
+
+  // If a pending multi-floor route exists for this floor, draw it
+  if (window.pendingDestinationPath && window.pendingDestinationPath.floor === floor) {
+    drawNavigationPathOnMap(window.pendingDestinationPath.path);
+    window.pendingDestinationPath = null;
+    showToast(`Transit complete. Walkway to destination loaded.`);
+  } else {
+    showToast(`Switched to Floor ${activeFloor}`);
+  }
+}
+
+function updateNavigationRoomOptions() {
+  // Clear select elements
+  navStartSelect.innerHTML = '<option value="">-- Choose Start Room --</option>';
+  navEndSelect.innerHTML = '<option value="">-- Choose Destination --</option>';
+  
+  const floors = ['1', '2', '3', '4', '5'];
+  
+  floors.forEach(fl => {
+    const roomsOnFloor = savedRooms.filter(r => r.floor === fl);
+    if (roomsOnFloor.length > 0) {
+      const startGroup = document.createElement('optgroup');
+      startGroup.label = `Floor ${fl}`;
+      const endGroup = document.createElement('optgroup');
+      endGroup.label = `Floor ${fl}`;
+      
+      roomsOnFloor.forEach(room => {
+        const hasDoors = savedDoors.some(d => d.roomId === room.id);
+        const labelText = room.name + (hasDoors ? "" : " (No doors!)");
+        
+        const opt1 = document.createElement('option');
+        opt1.value = room.id;
+        opt1.textContent = labelText;
+        opt1.disabled = !hasDoors;
+        startGroup.appendChild(opt1);
+        
+        const opt2 = document.createElement('option');
+        opt2.value = room.id;
+        opt2.textContent = labelText;
+        opt2.disabled = !hasDoors;
+        endGroup.appendChild(opt2);
+      });
+      
+      navStartSelect.appendChild(startGroup);
+      navEndSelect.appendChild(endGroup);
+    }
+  });
+}
+
+function findClosestRoom(pt) {
+  let closestRoom = null;
+  let minDistance = Infinity;
+  
+  const roomsOnFloor = savedRooms.filter(r => r.floor === activeFloor);
+  roomsOnFloor.forEach(room => {
+    const poly = L.polygon(room.latlngs);
+    const center = poly.getBounds().getCenter();
+    const dist = map.distance(pt, [center.lat, center.lng]);
+    if (dist < minDistance) {
+      minDistance = dist;
+      closestRoom = room;
+    }
+  });
+  
+  return minDistance < 100 ? closestRoom : null;
+}
+
+function saveBoundary(latlngs) {
+  // Ensure only one boundary per floor
+  const existingBoundary = savedBoundaries.find(b => b.floor === activeFloor);
+  if (existingBoundary) {
+    savedBoundaries = savedBoundaries.filter(b => b.id !== existingBoundary.id);
+    boundariesLayerGroup.eachLayer(layer => {
+      if (layer.dataset && layer.dataset.id === existingBoundary.id) {
+        boundariesLayerGroup.removeLayer(layer);
+      }
+    });
+  }
+
+  const boundary = {
+    id: 'boundary-' + Date.now(),
+    floor: activeFloor,
+    latlngs: latlngs
+  };
+  savedBoundaries.push(boundary);
+  renderBoundary(boundary);
+  saveFeaturesToLocalStorage();
+  showToast('Floor Boundary saved.');
+}
+
+function renderBoundary(boundary) {
+  const poly = L.polygon(boundary.latlngs, {
+    className: 'drawn-boundary-polygon',
+    color: 'var(--warning)',
+    fillColor: 'var(--warning)',
+    fillOpacity: 0.03,
+    weight: 2.5,
+    dashArray: '6 6'
+  });
+  
+  poly.dataset = { id: boundary.id, type: 'boundary' };
+  poly.on('click', (e) => handleFeatureClick(e, boundary.id, 'boundary'));
+  poly.addTo(boundariesLayerGroup);
+}
+
+function renderDoor(door) {
+  const marker = L.marker(door.latlng, {
+    icon: L.divIcon({
+      html: '<div class="drawn-door-icon"><i class="fa-solid fa-door-open"></i></div>',
+      className: 'custom-door-divicon',
+      iconSize: [20, 20],
+      iconAnchor: [10, 10]
+    })
+  });
+  
+  const room = savedRooms.find(r => r.id === door.roomId);
+  if (room) {
+    marker.bindTooltip(`Door to: ${room.name}`, { direction: 'top', className: 'room-tooltip-label' });
+  }
+  
+  marker.dataset = { id: door.id, type: 'door' };
+  marker.on('click', (e) => {
+    L.DomEvent.stopPropagation(e);
+    handleFeatureClick(e, door.id, 'door');
+  });
+  marker.addTo(doorsLayerGroup);
+}
+
+function calculateAndDrawPath() {
+  const startRoomId = navStartSelect.value;
+  const endRoomId = navEndSelect.value;
+  
+  if (!startRoomId || !endRoomId) {
+    showToast('Please select both Start and Destination rooms.');
+    return;
+  }
+  
+  if (startRoomId === endRoomId) {
+    showToast('Start and Destination are the same room!');
+    return;
+  }
+  
+  const startRoom = savedRooms.find(r => r.id === startRoomId);
+  const endRoom = savedRooms.find(r => r.id === endRoomId);
+  
+  if (!startRoom || !endRoom) return;
+  
+  clearNavigationPath();
+  
+  if (startRoom.floor === endRoom.floor) {
+    if (activeFloor !== startRoom.floor) {
+      switchActiveFloor(startRoom.floor);
+      const floorButtons = document.querySelectorAll('.floor-btn');
+      floorButtons.forEach(btn => {
+        if (btn.dataset.floor === activeFloor) btn.classList.add('active');
+        else btn.classList.remove('active');
+      });
+    }
+    
+    const pathLatLngs = runPathfindingOnFloor(startRoom, endRoom, startRoom.floor);
+    if (pathLatLngs) {
+      drawNavigationPathOnMap(pathLatLngs);
+      showToast('Directions loaded.');
+    }
+  } else {
+    showToast('Routing across floors...');
+    
+    const startStairs = savedRooms.find(r => r.floor === startRoom.floor && r.category === 'stairs');
+    const endStairs = savedRooms.find(r => r.floor === endRoom.floor && r.category === 'stairs');
+    
+    if (!startStairs || !endStairs) {
+      alert('Stairs / Elevator portal rooms are required on both floors for multi-floor navigation. Please map a "Stairs / Elevator" room category on both floors.');
+      return;
+    }
+    
+    if (activeFloor !== startRoom.floor) {
+      switchActiveFloor(startRoom.floor);
+      const floorButtons = document.querySelectorAll('.floor-btn');
+      floorButtons.forEach(btn => {
+        if (btn.dataset.floor === activeFloor) btn.classList.add('active');
+        else btn.classList.remove('active');
+      });
+    }
+    
+    const startPath = runPathfindingOnFloor(startRoom, startStairs, startRoom.floor);
+    if (!startPath) {
+      showToast('Could not route to stairs on start floor.');
+      return;
+    }
+    
+    const endPath = runPathfindingOnFloor(endStairs, endRoom, endRoom.floor);
+    if (!endPath) {
+      showToast('Could not route from stairs to destination room.');
+      return;
+    }
+    
+    drawNavigationPathOnMap(startPath);
+    
+    const stairsCenter = L.polygon(startStairs.latlngs).getBounds().getCenter();
+    L.popup()
+      .setLatLng(stairsCenter)
+      .setContent(`
+        <div style="font-family: 'Outfit', sans-serif; color: var(--text-primary); text-align: center;">
+          <h4 style="color: var(--warning); margin-bottom: 4px;"><i class="fa-solid fa-stairs"></i> Floor Transit</h4>
+          <p style="font-size: 0.8rem; line-height: 1.4; margin-bottom: 6px;">
+            Go to the stairs/elevator on <strong>Floor ${startRoom.floor}</strong>, then switch to <strong>Floor ${endRoom.floor}</strong> in the selector.
+          </p>
+          <button onclick="switchActiveFloor('${endRoom.floor}'); document.querySelectorAll('.floor-btn').forEach(btn => { if (btn.dataset.floor === '${endRoom.floor}') btn.classList.add('active'); else btn.classList.remove('active'); }); map.closePopup();" style="background: var(--accent-color); border: none; color: white; padding: 4px 8px; border-radius: 4px; font-size: 0.75rem; cursor: pointer; font-weight: 600;">
+            Go to Floor ${endRoom.floor}
+          </button>
+        </div>
+      `)
+      .openOn(map);
+      
+    window.pendingDestinationPath = {
+      path: endPath,
+      floor: endRoom.floor
+    };
+  }
+}
+
+function runPathfindingOnFloor(startRoom, endRoom, floor) {
+  const boundary = savedBoundaries.find(b => b.floor === floor);
+  if (!boundary) {
+    alert(`Please draw the Floor Boundary for Floor ${floor} first!`);
+    return null;
+  }
+  
+  const startDoors = savedDoors.filter(d => d.roomId === startRoom.id && d.floor === floor);
+  const endDoors = savedDoors.filter(d => d.roomId === endRoom.id && d.floor === floor);
+  
+  if (startDoors.length === 0 || endDoors.length === 0) {
+    showToast('Start or destination room is missing doors.');
+    return null;
+  }
+  
+  const startDoorLatLng = startDoors[0].latlng;
+  const endDoorLatLng = endDoors[0].latlng;
+  
+  const path = runAStar(startDoorLatLng, endDoorLatLng, boundary, floor);
+  if (!path) {
+    showToast('No walkable path found inside the boundary.');
+    return null;
+  }
+  
+  return path;
+}
+
+function drawNavigationPathOnMap(latlngs) {
+  if (navigationPathPolyline) {
+    map.removeLayer(navigationPathPolyline);
+  }
+  
+  navigationPathPolyline = L.polyline(latlngs, {
+    className: 'navigation-path',
+    color: '#10b981',
+    weight: 5
+  }).addTo(map);
+  
+  map.fitBounds(navigationPathPolyline.getBounds(), { padding: [30, 30] });
+}
+
+function clearNavigationPath() {
+  if (navigationPathPolyline) {
+    map.removeLayer(navigationPathPolyline);
+    navigationPathPolyline = null;
+  }
+  window.pendingDestinationPath = null;
+}
+
+function getDistanceToSegment(p, a, b) {
+  let x = p[0], y = p[1];
+  let x1 = a[0], y1 = a[1];
+  let x2 = b[0], y2 = b[1];
+  
+  let A = x - x1;
+  let B = y - y1;
+  let C = x2 - x1;
+  let D = y2 - y1;
+  
+  let dot = A * C + B * D;
+  let len_sq = C * C + D * D;
+  let param = -1;
+  if (len_sq != 0) param = dot / len_sq;
+  
+  let xx, yy;
+  if (param < 0) {
+    xx = x1;
+    yy = y1;
+  } else if (param > 1) {
+    xx = x2;
+    yy = y2;
+  } else {
+    xx = x1 + param * C;
+    yy = y1 + param * D;
+  }
+  
+  let dx = x - xx;
+  let dy = y - yy;
+  return Math.sqrt(dx * dx + dy * dy);
+}
+
+function runAStar(startLatLng, endLatLng, boundary, floor) {
+  const boundaryPoly = L.polygon(boundary.latlngs);
+  const bounds = boundaryPoly.getBounds();
+  
+  const minLat = bounds.getSouthWest().lat;
+  const maxLat = bounds.getNorthEast().lat;
+  const minLng = bounds.getSouthWest().lng;
+  const maxLng = bounds.getNorthEast().lng;
+  
+  const rows = 80;
+  const cols = 80;
+  const dLat = (maxLat - minLat) / rows;
+  const dLng = (maxLng - minLng) / cols;
+  
+  const rooms = savedRooms.filter(r => r.floor === floor);
+  const walls = savedWalls.filter(w => w.floor === floor);
+  const windows = savedWindows.filter(w => w.floor === floor);
+  const doors = savedDoors.filter(d => d.floor === floor);
+  
+  function getCellCenter(r, c) {
+    return [
+      minLat + (r + 0.5) * dLat,
+      minLng + (c + 0.5) * dLng
+    ];
+  }
+  
+  function latLngToCell(latlng) {
+    let r = Math.floor((latlng[0] - minLat) / dLat);
+    let c = Math.floor((latlng[1] - minLng) / dLng);
+    r = Math.max(0, Math.min(rows - 1, r));
+    c = Math.max(0, Math.min(cols - 1, c));
+    return { r, c };
+  }
+  
+  const startCell = latLngToCell(startLatLng);
+  const endCell = latLngToCell(endLatLng);
+  
+  const cellDiag = Math.sqrt(dLat * dLat + dLng * dLng);
+  const wallDistThreshold = Math.max(dLat, dLng) * 0.8;
+  const doorRadiusThreshold = cellDiag * 2.0; 
+  
+  const grid = [];
+  for (let r = 0; r < rows; r++) {
+    grid[r] = [];
+    for (let c = 0; c < cols; c++) {
+      const pt = getCellCenter(r, c);
+      
+      if (!isPointInPolygon(pt, boundary.latlngs)) {
+        grid[r][c] = 0;
+        continue;
+      }
+      
+      let isNearDoor = false;
+      for (const d of doors) {
+        const dx = pt[0] - d.latlng[0];
+        const dy = pt[1] - d.latlng[1];
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist < doorRadiusThreshold) {
+          isNearDoor = true;
+          break;
+        }
+      }
+      
+      let isInsideRoom = false;
+      if (!isNearDoor) {
+        for (const room of rooms) {
+          if (isPointInPolygon(pt, room.latlngs)) {
+            isInsideRoom = true;
+            break;
+          }
+        }
+      }
+      
+      if (isInsideRoom) {
+        grid[r][c] = 0;
+        continue;
+      }
+      
+      let isNearWall = false;
+      for (const wall of walls) {
+        for (let i = 0; i < wall.latlngs.length - 1; i++) {
+          if (getDistanceToSegment(pt, wall.latlngs[i], wall.latlngs[i+1]) < wallDistThreshold) {
+            isNearWall = true;
+            break;
+          }
+        }
+        if (isNearWall) break;
+      }
+      
+      if (!isNearWall) {
+        for (const win of windows) {
+          for (let i = 0; i < win.latlngs.length - 1; i++) {
+            if (getDistanceToSegment(pt, win.latlngs[i], win.latlngs[i+1]) < wallDistThreshold) {
+              isNearWall = true;
+              break;
+            }
+          }
+          if (isNearWall) break;
+        }
+      }
+      
+      if (isNearWall) {
+        grid[r][c] = 0;
+        continue;
+      }
+      
+      grid[r][c] = 1; 
+    }
+  }
+  
+  grid[startCell.r][startCell.c] = 1;
+  grid[endCell.r][endCell.c] = 1;
+  
+  const openSet = [];
+  const closedSet = new Set();
+  
+  function getCellKey(r, c) {
+    return `${r},${c}`;
+  }
+  
+  const startNode = {
+    r: startCell.r,
+    c: startCell.c,
+    g: 0,
+    h: Math.sqrt(Math.pow(startCell.r - endCell.r, 2) + Math.pow(startCell.c - endCell.c, 2)),
+    f: 0,
+    parent: null
+  };
+  startNode.f = startNode.g + startNode.h;
+  openSet.push(startNode);
+  
+  let endNode = null;
+  
+  while (openSet.length > 0) {
+    openSet.sort((a, b) => a.f - b.f);
+    const curr = openSet.shift();
+    
+    if (curr.r === endCell.r && curr.c === endCell.c) {
+      endNode = curr;
+      break;
+    }
+    
+    closedSet.add(getCellKey(curr.r, curr.c));
+    
+    const dirs = [
+      { dr: -1, dc: 0, cost: 1 },
+      { dr: 1, dc: 0, cost: 1 },
+      { dr: 0, dc: -1, cost: 1 },
+      { dr: 0, dc: 1, cost: 1 },
+      { dr: -1, dc: -1, cost: 1.414 },
+      { dr: -1, dc: 1, cost: 1.414 },
+      { dr: 1, dc: -1, cost: 1.414 },
+      { dr: 1, dc: 1, cost: 1.414 }
+    ];
+    
+    for (const dir of dirs) {
+      const nr = curr.r + dir.dr;
+      const nc = curr.c + dir.dc;
+      
+      if (nr < 0 || nr >= rows || nc < 0 || nc >= cols) continue;
+      if (grid[nr][nc] === 0) continue;
+      if (closedSet.has(getCellKey(nr, nc))) continue;
+      
+      if (dir.dr !== 0 && dir.dc !== 0) {
+        if (grid[curr.r + dir.dr][curr.c] === 0 && grid[curr.r][curr.c + dir.dc] === 0) {
+          continue; 
+        }
+      }
+      
+      const gScore = curr.g + dir.cost;
+      const hScore = Math.sqrt(Math.pow(nr - endCell.r, 2) + Math.pow(nc - endCell.c, 2));
+      const fScore = gScore + hScore;
+      
+      let existing = openSet.find(n => n.r === nr && n.c === nc);
+      if (existing) {
+        if (gScore < existing.g) {
+          existing.g = gScore;
+          existing.f = fScore;
+          existing.parent = curr;
+        }
+      } else {
+        openSet.push({
+          r: nr,
+          c: nc,
+          g: gScore,
+          h: hScore,
+          f: fScore,
+          parent: curr
+        });
+      }
+    }
+  }
+  
+  if (!endNode) return null;
+  
+  const path = [];
+  let current = endNode;
+  while (current !== null) {
+    path.push(getCellCenter(current.r, current.c));
+    current = current.parent;
+  }
+  path.reverse();
+  
+  path[0] = startLatLng;
+  path[path.length - 1] = endLatLng;
+  
+  return path;
+}
+

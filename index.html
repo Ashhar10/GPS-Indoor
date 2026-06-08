@@ -33,20 +33,26 @@
       <!-- Section 1: Draw Editor Tools -->
       <div class="panel-section">
         <h3>Drawing Tools</h3>
-        <div class="tools-grid">
-          <button class="btn-tool active" id="tool-select" data-tool="select">
+        <div class="tools-grid" style="grid-template-columns: 1fr 1fr; gap: 6px;">
+          <button class="btn-tool active" id="tool-select" data-tool="select" style="grid-column: span 2;">
             <i class="fa-solid fa-arrow-pointer"></i> Select / Inspect
           </button>
+          <button class="btn-tool" id="tool-boundary" data-tool="boundary">
+            <i class="fa-solid fa-vector-square" style="color: var(--warning);"></i> Floor Boundary
+          </button>
           <button class="btn-tool" id="tool-room" data-tool="room">
-            <i class="fa-solid fa-draw-polygon"></i> Draw Room (Polygon)
+            <i class="fa-solid fa-draw-polygon" style="color: var(--accent-color);"></i> Draw Room
           </button>
           <button class="btn-tool" id="tool-wall" data-tool="wall">
-            <i class="fa-solid fa-pen-ruler"></i> Draw Wall (Line)
+            <i class="fa-solid fa-pen-ruler"></i> Draw Wall
           </button>
           <button class="btn-tool" id="tool-window" data-tool="window">
-            <i class="fa-solid fa-border-all"></i> Draw Window (Line)
+            <i class="fa-solid fa-border-all"></i> Draw Window
           </button>
-          <button class="btn-tool" id="tool-delete" data-tool="delete" style="border-color: rgba(239, 68, 68, 0.2); color: var(--danger);">
+          <button class="btn-tool" id="tool-door" data-tool="door">
+            <i class="fa-solid fa-door-open" style="color: var(--success);"></i> Place Door
+          </button>
+          <button class="btn-tool" id="tool-delete" data-tool="delete" style="grid-column: span 2; border-color: rgba(239, 68, 68, 0.2); color: var(--danger); justify-content: center;">
             <i class="fa-solid fa-eraser"></i> Eraser Mode
           </button>
         </div>
@@ -72,8 +78,36 @@
           </div>
         </div>
       </div>
+      
+      <!-- Section 3: Indoor Navigation / Wayfinder -->
+      <div class="panel-section">
+        <h3>Indoor Navigation</h3>
+        <p class="section-desc">Find the shortest walkable path between doors on the active floor.</p>
+        <div class="gps-status-card" style="padding: 10px; gap: 8px;">
+          <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 0.8rem;">
+            <label for="nav-start" style="color: var(--text-secondary); width: 40px; font-weight: 500;">Start:</label>
+            <select id="nav-start" style="flex: 1; background: var(--bg-input); border: 1px solid var(--border-color); color: var(--text-primary); padding: 6px; border-radius: 6px; font-size: 0.75rem; font-family: inherit; outline: none;">
+              <option value="">-- Choose Start Room --</option>
+            </select>
+          </div>
+          <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 0.8rem; margin-top: 4px;">
+            <label for="nav-end" style="color: var(--text-secondary); width: 40px; font-weight: 500;">End:</label>
+            <select id="nav-end" style="flex: 1; background: var(--bg-input); border: 1px solid var(--border-color); color: var(--text-primary); padding: 6px; border-radius: 6px; font-size: 0.75rem; font-family: inherit; outline: none;">
+              <option value="">-- Choose Destination --</option>
+            </select>
+          </div>
+          <div style="display: flex; gap: 6px; margin-top: 8px;">
+            <button class="btn-action primary" id="btn-find-path" style="flex: 1; padding: 8px 12px; font-size: 0.75rem; display: flex; align-items: center; justify-content: center; gap: 6px;">
+              <i class="fa-solid fa-route"></i> Get Directions
+            </button>
+            <button class="btn-action" id="btn-clear-path" style="padding: 8px 10px; font-size: 0.75rem;" title="Clear Route">
+              <i class="fa-solid fa-arrows-spin"></i> Reset
+            </button>
+          </div>
+        </div>
+      </div>
 
-      <!-- Section 3: Saved Rooms List -->
+      <!-- Section 4: Saved Rooms List -->
       <div class="panel-section" style="flex: 1; display: flex; flex-direction: column; overflow: hidden;">
         <h3>Mapped Rooms Directory</h3>
         <div class="rooms-list-container" id="rooms-list-container">
@@ -88,6 +122,16 @@
 
   <!-- Fullscreen Leaflet Map Container -->
   <div id="map"></div>
+
+  <!-- Floating Floor Selector widget (Right center of map) -->
+  <div class="floor-selector" id="floor-selector">
+    <div class="floor-selector-label"><i class="fa-solid fa-layer-group"></i> Floor</div>
+    <button class="floor-btn active" data-floor="1">F1</button>
+    <button class="floor-btn" data-floor="2">F2</button>
+    <button class="floor-btn" data-floor="3">F3</button>
+    <button class="floor-btn" data-floor="4">F4</button>
+    <button class="floor-btn" data-floor="5">F5</button>
+  </div>
 
   <!-- Room Metadata Edit Modal Popup (Glassmorphic) -->
   <div class="modal-overlay" id="room-modal">
@@ -110,12 +154,32 @@
             <option value="classroom">Classroom</option>
             <option value="restroom">Restroom</option>
             <option value="hallway">Hallway / Corridor</option>
+            <option value="stairs">Stairs / Elevator</option>
             <option value="other" selected>Other / Living Area</option>
           </select>
         </div>
         <div class="form-group">
+          <label for="room-floor-select">Floor Level</label>
+          <select id="room-floor-select">
+            <option value="1" selected>Floor 1</option>
+            <option value="2">Floor 2</option>
+            <option value="3">Floor 3</option>
+            <option value="4">Floor 4</option>
+            <option value="5">Floor 5</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Doors (At least 1 required for navigation)</label>
+          <div style="display: flex; gap: 8px; align-items: center;">
+            <span id="modal-door-status" class="door-status-pill empty" style="font-size: 0.75rem; padding: 6px 10px; border-radius: 6px; background: rgba(239, 68, 68, 0.2); color: var(--danger); font-weight: 600; border: 1px solid rgba(239, 68, 68, 0.3);">0 Doors Placed</span>
+            <button class="btn-action" id="btn-modal-add-door" type="button" style="font-size: 0.75rem; padding: 6px 12px; flex: 1; display: flex; align-items: center; justify-content: center; gap: 6px;">
+              <i class="fa-solid fa-location-crosshairs"></i> Place Door on Map
+            </button>
+          </div>
+        </div>
+        <div class="form-group">
           <label for="room-desc-input">Description / Notes</label>
-          <textarea id="room-desc-input" rows="3" placeholder="Describe the space, room number, or contents..."></textarea>
+          <textarea id="room-desc-input" rows="2" placeholder="Describe the space, room number, or contents..."></textarea>
         </div>
       </div>
       <div class="modal-footer">
