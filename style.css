@@ -715,18 +715,19 @@ body {
     position: relative;
   }
 
-  /* 1. Turn Sidebar into a Bottom Drawer Sheet */
+  /* 1. Turn Sidebar into a Bottom Drawer Sheet (Two-state: collapsed by default) */
   .search-panel {
     top: auto;
     left: 0;
     right: 0;
     bottom: 0;
     width: 100%;
-    height: 250px; /* Default: Half expanded */
+    height: calc(64px + env(safe-area-inset-bottom)); /* Collapsed height by default */
     border-radius: 20px 20px 0 0;
     border-left: none;
     border-right: none;
     border-bottom: none;
+    padding-bottom: env(safe-area-inset-bottom);
     transition: height 0.4s cubic-bezier(0.16, 1, 0.3, 1);
     z-index: 1000;
   }
@@ -735,22 +736,18 @@ body {
     display: flex; /* Show on mobile */
   }
 
-  /* Height overrides based on state */
-  .search-panel.minimized {
-    height: 60px;
-  }
-
+  /* Height override when expanded */
   .search-panel.expanded {
-    height: 80vh;
+    height: 75vh;
   }
 
   .search-panel.expanded #btn-toggle-drawer i {
-    transform: rotate(180deg); /* Point downwards when full screen */
+    transform: rotate(180deg); /* Point downwards when expanded */
   }
 
   .panel-header {
     padding: 12px 16px;
-    height: 60px;
+    height: 64px;
   }
 
   .panel-content {
@@ -760,32 +757,24 @@ body {
 
   /* 2. Reposition Leaflet Controls above the drawer */
   .leaflet-bottom.leaflet-right {
-    bottom: 260px !important; /* Move above collapsed drawer */
+    bottom: calc(75px + env(safe-area-inset-bottom)) !important; /* Move above collapsed drawer */
     transition: bottom 0.4s cubic-bezier(0.16, 1, 0.3, 1);
   }
 
-  .search-panel.minimized ~ #map .leaflet-bottom.leaflet-right {
-    bottom: 70px !important;
-  }
-
   .search-panel.expanded ~ #map .leaflet-bottom.leaflet-right {
-    bottom: calc(80vh + 10px) !important;
+    bottom: calc(75vh + 10px) !important;
   }
 
   /* 3. Reposition Map Style Selector above the drawer */
   .map-style-toggle {
-    bottom: 260px;
+    bottom: calc(75px + env(safe-area-inset-bottom));
     right: auto;
     left: 16px; /* Place on left to balance zoom buttons */
     transition: bottom 0.4s cubic-bezier(0.16, 1, 0.3, 1);
   }
 
-  .search-panel.minimized ~ .map-style-toggle {
-    bottom: 70px;
-  }
-
   .search-panel.expanded ~ .map-style-toggle {
-    bottom: calc(80vh + 10px);
+    bottom: calc(75vh + 10px);
   }
 
   /* 4. Position Toast Message at Top Center on Mobile */

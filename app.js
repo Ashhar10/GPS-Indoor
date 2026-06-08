@@ -323,23 +323,23 @@ function setupUIEventListeners() {
   btnStyleGoogleHybrid.addEventListener('click', () => swapTileStyle('google-hybrid'));
   btnStyleOsm.addEventListener('click', () => swapTileStyle('osm'));
 
-  // Mobile bottom sheet height toggling
+  // Mobile bottom sheet height toggling (Two-state: collapsed vs expanded)
   const btnToggleDrawer = document.getElementById('btn-toggle-drawer');
   const searchPanel = document.querySelector('.search-panel');
-  let drawerHeightState = 'half'; // 'minimized', 'half', 'expanded'
+  let isDrawerExpanded = false;
+
+  // Initialize collapsed state on mobile
+  if (window.innerWidth <= 768) {
+    btnToggleDrawer.innerHTML = '<i class="fa-solid fa-chevron-up"></i>';
+  }
 
   btnToggleDrawer.addEventListener('click', () => {
-    if (drawerHeightState === 'half') {
-      drawerHeightState = 'expanded';
-      searchPanel.className = 'search-panel expanded';
+    isDrawerExpanded = !isDrawerExpanded;
+    if (isDrawerExpanded) {
+      searchPanel.classList.add('expanded');
       btnToggleDrawer.innerHTML = '<i class="fa-solid fa-chevron-down"></i>';
-    } else if (drawerHeightState === 'expanded') {
-      drawerHeightState = 'minimized';
-      searchPanel.className = 'search-panel minimized';
-      btnToggleDrawer.innerHTML = '<i class="fa-solid fa-chevron-up"></i>';
     } else {
-      drawerHeightState = 'half';
-      searchPanel.className = 'search-panel';
+      searchPanel.classList.remove('expanded');
       btnToggleDrawer.innerHTML = '<i class="fa-solid fa-chevron-up"></i>';
     }
   });
