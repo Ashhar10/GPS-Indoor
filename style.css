@@ -722,12 +722,12 @@ body {
     right: 0;
     bottom: 0;
     width: 100%;
-    height: calc(64px + env(safe-area-inset-bottom)); /* Collapsed height by default */
+    height: calc(64px + env(safe-area-inset-bottom, 0px)); /* Collapsed height by default */
     border-radius: 20px 20px 0 0;
     border-left: none;
     border-right: none;
     border-bottom: none;
-    padding-bottom: env(safe-area-inset-bottom);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
     transition: height 0.4s cubic-bezier(0.16, 1, 0.3, 1);
     z-index: 1000;
   }
@@ -757,7 +757,7 @@ body {
 
   /* 2. Reposition Leaflet Controls above the drawer */
   .leaflet-bottom.leaflet-right {
-    bottom: calc(75px + env(safe-area-inset-bottom)) !important; /* Move above collapsed drawer */
+    bottom: calc(75px + env(safe-area-inset-bottom, 0px)) !important; /* Move above collapsed drawer */
     transition: bottom 0.4s cubic-bezier(0.16, 1, 0.3, 1);
   }
 
@@ -767,7 +767,7 @@ body {
 
   /* 3. Reposition Map Style Selector above the drawer */
   .map-style-toggle {
-    bottom: calc(75px + env(safe-area-inset-bottom));
+    bottom: calc(75px + env(safe-area-inset-bottom, 0px));
     right: auto;
     left: 16px; /* Place on left to balance zoom buttons */
     transition: bottom 0.4s cubic-bezier(0.16, 1, 0.3, 1);
