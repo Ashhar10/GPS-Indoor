@@ -857,7 +857,7 @@ function updateRoomDirectoryUI() {
   roomsOnFloor.forEach(room => {
     // Retrieve occupant count from the synchronized cache
     const count = isHeatmapEnabled ? (roomOccupancies[room.id] || 0) : 0;
-    const isCrowded = count > 50;
+    const isCrowded = count > 10;
     const badgeClass = isCrowded ? 'room-dir-occupants crowded' : 'room-dir-occupants';
 
     const item = document.createElement('li');
@@ -1502,8 +1502,8 @@ function initHeatmap() {
         0.1: '#3b82f6', // Cool Blue (Low traffic)
         0.3: '#06b6d4', // Cyan
         0.5: '#10b981', // Green (Normal traffic)
-        0.7: '#f59e0b', // Orange (Medium density: 16-50 people)
-        1.0: '#ef4444'  // Red (High density: >50 people)
+        0.7: '#f59e0b', // Orange (Medium density: 6-10 people)
+        1.0: '#ef4444'  // Red (High density: >10 people)
       }
     }).addTo(map);
   }
@@ -1799,7 +1799,7 @@ function updateAgents() {
     const badge = document.getElementById(`occupancy-badge-${room.id}`);
     if (badge) {
       badge.innerHTML = `<i class="fa-solid fa-users"></i> ${count}`;
-      if (count > 50) {
+      if (count > 10) {
         badge.className = 'room-dir-occupants crowded';
       } else {
         badge.className = 'room-dir-occupants';
