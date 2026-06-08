@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GPS Indoor Map Editor & Proximity Wayfinder</title>
+  <!-- Leaflet CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+  <!-- FontAwesome for Icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- Floating Editor Sidebar (Left Panel) -->
+  <div class="search-panel">
+    <!-- Header / Brand -->
+    <header class="panel-header">
+      <div class="logo">
+        <i class="fa-solid fa-map-location-dot"></i>
+        <span>GPS Indoor Mapper</span>
+      </div>
+      <div style="display: flex; gap: 8px; align-items: center;">
+        <button class="btn-top-gps" id="btn-find-me" title="Center on My GPS Location">
+          <i class="fa-solid fa-crosshairs"></i> Locate
+        </button>
+        <button class="btn-toggle-drawer" id="btn-toggle-drawer" title="Toggle Drawer Height">
+          <i class="fa-solid fa-chevron-up"></i>
+        </button>
+      </div>
+    </header>
+
+    <div class="panel-content">
+      <!-- Section 1: Draw Editor Tools -->
+      <div class="panel-section">
+        <h3>Drawing Tools</h3>
+        <div class="tools-grid">
+          <button class="btn-tool active" id="tool-select" data-tool="select">
+            <i class="fa-solid fa-arrow-pointer"></i> Select / Inspect
+          </button>
+          <button class="btn-tool" id="tool-room" data-tool="room">
+            <i class="fa-solid fa-draw-polygon"></i> Draw Room (Polygon)
+          </button>
+          <button class="btn-tool" id="tool-wall" data-tool="wall">
+            <i class="fa-solid fa-pen-ruler"></i> Draw Wall (Line)
+          </button>
+          <button class="btn-tool" id="tool-window" data-tool="window">
+            <i class="fa-solid fa-border-all"></i> Draw Window (Line)
+          </button>
+          <button class="btn-tool" id="tool-delete" data-tool="delete" style="border-color: rgba(239, 68, 68, 0.2); color: var(--danger);">
+            <i class="fa-solid fa-eraser"></i> Eraser Mode
+          </button>
+        </div>
+      </div>
+
+      <!-- Section 2: GPS Simulator controls -->
+      <div class="panel-section">
+        <h3>GPS Simulator</h3>
+        <p class="section-desc">Test proximity triggers by clicking on the map to move your simulated self.</p>
+        <label class="checkbox-container">
+          <input type="checkbox" id="toggle-simulator">
+          <span class="checkmark"></span>
+          <i class="fa-solid fa-shoe-prints"></i> Enable Walk Simulator
+        </label>
+        <div class="gps-status-card">
+          <div class="gps-coords">
+            <span>Lat: <strong id="val-lat">--</strong></span>
+            <span>Lng: <strong id="val-lng">--</strong></span>
+          </div>
+          <div class="active-room-display">
+            <span>Current Room:</span>
+            <div id="val-current-room" class="current-room-pill outside">Outside</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Section 3: Saved Rooms List -->
+      <div class="panel-section" style="flex: 1; display: flex; flex-direction: column; overflow: hidden;">
+        <h3>Mapped Rooms Directory</h3>
+        <div class="rooms-list-container" id="rooms-list-container">
+          <ul class="rooms-list" id="saved-rooms-list">
+            <!-- Dynamic room directory cards inserted here -->
+            <li class="empty-list-placeholder">No rooms drawn yet. Use the Drawing Tools above to map your building!</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Fullscreen Leaflet Map Container -->
+  <div id="map"></div>
+
+  <!-- Room Metadata Edit Modal Popup (Glassmorphic) -->
+  <div class="modal-overlay" id="room-modal">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h2>Save Mapped Room</h2>
+        <button class="modal-close" id="btn-modal-close"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label for="room-name-input">Room Name / Label</label>
+          <input type="text" id="room-name-input" placeholder="e.g. Living Room, Office 101, Server Rack">
+        </div>
+        <div class="form-group">
+          <label for="room-category-select">Category</label>
+          <select id="room-category-select">
+            <option value="office">Office</option>
+            <option value="lab">Research Lab</option>
+            <option value="conference">Conference Room</option>
+            <option value="classroom">Classroom</option>
+            <option value="restroom">Restroom</option>
+            <option value="hallway">Hallway / Corridor</option>
+            <option value="other" selected>Other / Living Area</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="room-desc-input">Description / Notes</label>
+          <textarea id="room-desc-input" rows="3" placeholder="Describe the space, room number, or contents..."></textarea>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-action" id="btn-modal-cancel">Cancel</button>
+        <button class="btn-action primary" id="btn-modal-save">Save Room</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- "Maze Map Done" Celebration Notification Overlay -->
+  <div class="success-overlay" id="success-overlay">
+    <div class="success-card">
+      <div class="success-icon-box">
+        <i class="fa-solid fa-circle-check"></i>
+      </div>
+      <div class="success-content">
+        <h4>Maze Map Done!</h4>
+        <p>You have entered: <strong id="success-room-name">Main Office</strong></p>
+      </div>
+      <button class="success-close" id="btn-success-close"><i class="fa-solid fa-xmark"></i></button>
+    </div>
+  </div>
+
+  <!-- Floor/Map Style controls (Detailed map options selector) -->
+  <div class="map-style-toggle">
+    <button class="style-btn" id="btn-style-dark" title="Dark Map Theme"><i class="fa-solid fa-moon"></i></button>
+    <button class="style-btn" id="btn-style-google-street" title="Google Streets"><i class="fa-solid fa-map"></i></button>
+    <button class="style-btn active" id="btn-style-google-hybrid" title="Google Hybrid (Detailed Satellite)"><i class="fa-solid fa-earth-americas"></i></button>
+    <button class="style-btn" id="btn-style-osm" title="OpenStreetMap"><i class="fa-solid fa-road"></i></button>
+  </div>
+
+  <!-- Floating Toast Notification -->
+  <div class="toast" id="toast-notification">
+    <i class="fa-solid fa-circle-info"></i>
+    <span id="toast-message">Map loaded successfully!</span>
+  </div>
+
+  <!-- Leaflet JS -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <!-- App JS -->
+  <script src="app.js"></script>
+</body>
+</html>
