@@ -36,6 +36,7 @@ let simulatedAgents = [];
 let agentUpdateIntervalId = null;
 let heatmapUpdateIntervalId = null;
 let roomOccupancies = {};
+let simulatedHour = 10;
 
 // Leaflet Layer groups to host vectors on map
 let boundariesLayerGroup;
@@ -90,6 +91,12 @@ const navStartSelect = document.getElementById('nav-start');
 const navEndSelect = document.getElementById('nav-end');
 const btnFindPath = document.getElementById('btn-find-path');
 const btnClearPath = document.getElementById('btn-clear-path');
+
+// Time of Day HUD Elements
+const heatmapTimeControl = document.getElementById('heatmap-time-control');
+const simTimeSlider = document.getElementById('sim-time-slider');
+const simTimeDisplay = document.getElementById('sim-time-display');
+const simTimeDesc = document.getElementById('sim-time-desc');
 
 const toolButtons = {
   select: document.getElementById('tool-select'),
@@ -452,11 +459,38 @@ function setupUIEventListeners() {
     if (isHeatmapEnabled) {
       initHeatmap();
       startCrowdSimulation();
+      if (heatmapTimeControl) heatmapTimeControl.style.display = 'flex';
     } else {
       stopCrowdSimulation();
       removeHeatmap();
+      if (heatmapTimeControl) heatmapTimeControl.style.display = 'none';
     }
   });
+
+  // Time of Day Slider Listener
+  if (simTimeSlider) {
+    simTimeSlider.addEventListener('input', (e) => {
+      simulatedHour = parseInt(e.target.value);
+      if (simTimeDisplay) simTimeDisplay.textContent = formatHour(simulatedHour);
+      if (simTimeDesc) simTimeDesc.textContent = getTimeOfDayDescription(simulatedHour);
+      
+      // Trigger quick evaluation for agents to adapt to schedule change
+      if (simulatedAgents.length > 0) {
+        simulatedAgents.forEach(agent => {
+          if (agent.state === 'resting') {
+            const currentRoom = savedRooms.find(r => r.id === agent.destRoomId);
+            if (currentRoom) {
+              const currentWeight = getCategoryWeight(currentRoom.category, simulatedHour);
+              // If the room becomes unattractive at this hour, give them a high chance to migrate
+              if (currentWeight < 0.25 && Math.random() < 0.65) {
+                agent.restTicks = Math.floor(Math.random() * 5) + 1; // leave within 1-5 ticks (approx 0.3s)
+              }
+            }
+          }
+        });
+      }
+    });
+  }
 
   // Map drawing clicks listeners
   map.on('click', handleMapClick);
@@ -974,7 +1008,7 @@ function switchActiveFloor(floor) {
 
   // Restart crowd simulation for the new floor if heatmap is enabled
   if (isHeatmapEnabled) {
-    stopCrowdSimulation();
+    stopCrowdSimulation(false);
     startCrowdSimulation();
   }
 
@@ -1594,6 +1628,87 @@ function moveTowards(current, target, maxStep) {
   };
 }
 
+// Formats simulated hour integer into 12-hour AM/PM string
+function formatHour(hour) {
+  if (hour === 0) return "12:00 AM";
+  if (hour === 12) return "12:00 PM";
+  if (hour > 12) return `${hour - 12}:00 PM`;
+  return `${hour}:00 AM`;
+}
+
+// Returns a human-friendly description of active locations based on the hour
+function getTimeOfDayDescription(hour) {
+  if (hour >= 22 || hour < 7) {
+    return "Night Hours: Building mostly empty; light research lab activity.";
+  } else if (hour >= 7 && hour < 11) {
+    return "Morning Rush: Classrooms and faculty offices highly active.";
+  } else if (hour >= 11 && hour < 14) {
+    return "Lunch Break: High density in lounges, cafes, and common areas.";
+  } else if (hour >= 14 && hour < 18) {
+    return "Afternoon Study: Balanced activity across classrooms, labs, and offices.";
+  } else {
+    return "Evening Hours: Night classes and students studying late in labs.";
+  }
+}
+
+// Maps room category and hour of day to relative probability weights
+function getCategoryWeight(category, hour) {
+  if (category === 'stairs' || category === 'hallway') return 0.02; // Transit areas
+  
+  if (hour >= 22 || hour < 7) { // Night
+    if (category === 'lab') return 0.1;
+    if (category === 'other') return 0.05;
+    return 0.01;
+  } else if (hour >= 7 && hour < 11) { // Morning
+    if (category === 'classroom') return 0.8;
+    if (category === 'office') return 0.7;
+    if (category === 'other') return 0.4;
+    if (category === 'lab') return 0.3;
+    return 0.1;
+  } else if (hour >= 11 && hour < 14) { // Lunch
+    if (category === 'other') return 0.9; // lounges, cafeteria
+    if (category === 'office') return 0.4;
+    if (category === 'lab') return 0.4;
+    if (category === 'classroom') return 0.2;
+    return 0.15;
+  } else if (hour >= 14 && hour < 18) { // Afternoon
+    if (category === 'office') return 0.8;
+    if (category === 'classroom') return 0.7;
+    if (category === 'lab') return 0.7;
+    if (category === 'conference') return 0.5;
+    if (category === 'other') return 0.4;
+    return 0.1;
+  } else { // Evening (18 to 22)
+    if (category === 'lab') return 0.5;
+    if (category === 'classroom') return 0.3;
+    if (category === 'other') return 0.4;
+    if (category === 'office') return 0.2;
+    return 0.05;
+  }
+}
+
+// Selects a destination room based on relative category probability weights
+function selectDestinationRoomBySchedule(roomsWithDoors, hour) {
+  if (roomsWithDoors.length === 0) return null;
+  if (roomsWithDoors.length === 1) return roomsWithDoors[0];
+  
+  const weights = roomsWithDoors.map(room => getCategoryWeight(room.category, hour));
+  const totalWeight = weights.reduce((sum, w) => sum + w, 0);
+  
+  if (totalWeight <= 0) {
+    return roomsWithDoors[Math.floor(Math.random() * roomsWithDoors.length)];
+  }
+  
+  let rand = Math.random() * totalWeight;
+  for (let i = 0; i < roomsWithDoors.length; i++) {
+    rand -= weights[i];
+    if (rand <= 0) {
+      return roomsWithDoors[i];
+    }
+  }
+  return roomsWithDoors[roomsWithDoors.length - 1];
+}
+
 function startCrowdSimulation() {
   stopCrowdSimulation();
   
@@ -1632,9 +1747,9 @@ function startCrowdSimulation() {
       if (!isHeatmapEnabled || activeFloor !== boundary.floor) return;
       
       const startRoom = roomsWithDoors[Math.floor(Math.random() * roomsWithDoors.length)];
-      let destRoom = roomsWithDoors[Math.floor(Math.random() * roomsWithDoors.length)];
+      let destRoom = selectDestinationRoomBySchedule(roomsWithDoors, simulatedHour);
       while (destRoom.id === startRoom.id && roomsWithDoors.length > 1) {
-        destRoom = roomsWithDoors[Math.floor(Math.random() * roomsWithDoors.length)];
+        destRoom = selectDestinationRoomBySchedule(roomsWithDoors, simulatedHour);
       }
       
       const startDoors = savedDoors.filter(d => d.roomId === startRoom.id && d.floor === activeFloor);
@@ -1709,9 +1824,9 @@ function updateAgents() {
       if (agent.restTicks <= 0) {
         const currentRoom = savedRooms.find(r => r.id === agent.destRoomId);
         if (currentRoom && roomsWithDoors.length > 1) {
-          let destRoom = roomsWithDoors[Math.floor(Math.random() * roomsWithDoors.length)];
-          while (destRoom.id === currentRoom.id) {
-            destRoom = roomsWithDoors[Math.floor(Math.random() * roomsWithDoors.length)];
+          let destRoom = selectDestinationRoomBySchedule(roomsWithDoors, simulatedHour);
+          while (destRoom.id === currentRoom.id && roomsWithDoors.length > 1) {
+            destRoom = selectDestinationRoomBySchedule(roomsWithDoors, simulatedHour);
           }
           
           const rawPath = runPathfindingOnFloor(currentRoom, destRoom, activeFloor);
@@ -1743,6 +1858,12 @@ function updateAgents() {
         // Mosey/mill around inside the room
         const currentRoom = savedRooms.find(r => r.id === agent.destRoomId);
         if (currentRoom) {
+          // If room attractiveness is low at this hour, give agent a small chance to leave early
+          const currentWeight = getCategoryWeight(currentRoom.category, simulatedHour);
+          if (currentWeight < 0.25 && Math.random() < 0.015) {
+            agent.restTicks = 0; 
+          }
+          
           if (agent.pauseTicks > 0) {
             agent.pauseTicks--;
           } else {
@@ -1831,7 +1952,7 @@ function updateHeatmapData() {
   heatmapLayer.setLatLngs(heatPoints);
 }
 
-function stopCrowdSimulation() {
+function stopCrowdSimulation(resetClock = true) {
   if (agentUpdateIntervalId) {
     clearInterval(agentUpdateIntervalId);
     agentUpdateIntervalId = null;
@@ -1842,6 +1963,13 @@ function stopCrowdSimulation() {
   }
   simulatedAgents = [];
   roomOccupancies = {};
+  
+  if (resetClock) {
+    simulatedHour = 10;
+    if (simTimeSlider) simTimeSlider.value = 10;
+    if (simTimeDisplay) simTimeDisplay.textContent = formatHour(10);
+    if (simTimeDesc) simTimeDesc.textContent = getTimeOfDayDescription(10);
+  }
   
   // Reset directory badges
   savedRooms.forEach(room => {

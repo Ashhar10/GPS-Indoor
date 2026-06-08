@@ -110,6 +110,25 @@
               <span class="checkmark"></span>
               <i class="fa-solid fa-fire" style="color: var(--warning);"></i> Enable Traffic Heatmap
             </label>
+            <!-- Simulated Time Slider HUD -->
+            <div id="heatmap-time-control" style="display: none; margin-top: 10px; flex-direction: column; gap: 6px;">
+              <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.75rem;">
+                <span style="color: var(--text-secondary); font-weight: 500;">Simulated Time:</span>
+                <strong id="sim-time-display" style="color: var(--warning);">10:00 AM</strong>
+              </div>
+              <input type="range" id="sim-time-slider" min="0" max="23" value="10" style="width: 100%; accent-color: var(--warning); cursor: pointer; margin-top: 2px;">
+              <div style="display: flex; justify-content: space-between; font-size: 0.6rem; color: var(--text-muted); padding: 0 2px;">
+                <span>12 AM</span>
+                <span>8 AM</span>
+                <span>12 PM</span>
+                <span>4 PM</span>
+                <span>8 PM</span>
+              </div>
+              <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border-color); border-radius: 6px; padding: 6px; font-size: 0.65rem; color: var(--text-secondary); margin-top: 4px; line-height: 1.35; display: flex; gap: 6px; align-items: flex-start;">
+                <i class="fa-regular fa-clock" style="color: var(--warning); font-size: 0.75rem; margin-top: 1px;"></i>
+                <span id="sim-time-desc">Morning Rush: Classrooms and faculty offices highly active.</span>
+              </div>
+            </div>
           </div>
         </div>
       </div>
