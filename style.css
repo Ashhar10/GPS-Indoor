@@ -844,6 +844,26 @@ body {
   border: 1px solid rgba(16, 185, 129, 0.25);
 }
 
+/* Room Occupant Badges in Directory */
+.room-dir-occupants {
+  margin-left: 6px;
+  background: rgba(59, 130, 246, 0.15);
+  color: var(--accent-color);
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 0.65rem;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  gap: 3.5px;
+}
+
+.room-dir-occupants.crowded {
+  background: rgba(245, 158, 11, 0.18);
+  color: var(--warning);
+  box-shadow: 0 0 6px rgba(245, 158, 11, 0.25);
+}
+
 /* --- SUPER MOBILE RESPONSIVENESS --- */
 @media (max-width: 768px) {
   body {

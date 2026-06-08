@@ -104,6 +104,13 @@
               <i class="fa-solid fa-arrows-spin"></i> Reset
             </button>
           </div>
+          <div style="border-top: 1px solid var(--border-color); margin-top: 8px; padding-top: 8px;">
+            <label class="checkbox-container" style="margin-bottom: 0;">
+              <input type="checkbox" id="toggle-heatmap">
+              <span class="checkmark"></span>
+              <i class="fa-solid fa-fire" style="color: var(--warning);"></i> Enable Traffic Heatmap
+            </label>
+          </div>
         </div>
       </div>
 
@@ -219,6 +226,8 @@
 
   <!-- Leaflet JS -->
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <!-- Leaflet Heatmap Plugin -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.heat/0.2.0/leaflet-heat.js"></script>
   <!-- App JS -->
   <script src="app.js"></script>
 </body>

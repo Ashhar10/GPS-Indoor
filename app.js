@@ -29,6 +29,13 @@ let savedWindows = [];
 let savedDoors = [];
 let activeFloor = '1';
 
+// Heatmap and Crowd Simulation state
+let isHeatmapEnabled = false;
+let heatmapLayer = null;
+let simulatedAgents = [];
+let agentUpdateIntervalId = null;
+let heatmapUpdateIntervalId = null;
+
 // Leaflet Layer groups to host vectors on map
 let boundariesLayerGroup;
 let roomsLayerGroup;
@@ -258,7 +265,13 @@ function checkIndoorProximity(lat, lng) {
       highlightActiveRoomOnMap(containingRoom.id);
       
       // Show "Maze Map Done" Celebration Notification overlay
-      successRoomName.textContent = containingRoom.name;
+      let countText = "";
+      if (isHeatmapEnabled) {
+        const count = simulatedAgents.filter(a => a.state === 'resting' && a.destRoomId === containingRoom.id).length +
+                      simulatedAgents.filter(a => a.state === 'walking' && isPointInPolygon(a.latlng, containingRoom.latlngs)).length;
+        countText = ` (Occupancy: ${count})`;
+      }
+      successRoomName.textContent = containingRoom.name + countText;
       successOverlay.classList.add('show');
       
       showToast(`Welcome to ${containingRoom.name}! Proximity verified.`);
@@ -431,6 +444,19 @@ function setupUIEventListeners() {
   // Navigation Pathfinding buttons
   btnFindPath.addEventListener('click', calculateAndDrawPath);
   btnClearPath.addEventListener('click', clearNavigationPath);
+
+  // Traffic Heatmap Toggle Switch
+  const checkboxHeatmap = document.getElementById('toggle-heatmap');
+  checkboxHeatmap.addEventListener('change', (e) => {
+    isHeatmapEnabled = e.target.checked;
+    if (isHeatmapEnabled) {
+      initHeatmap();
+      startCrowdSimulation();
+    } else {
+      stopCrowdSimulation();
+      removeHeatmap();
+    }
+  });
 
   // Map drawing clicks listeners
   map.on('click', handleMapClick);
@@ -829,12 +855,21 @@ function updateRoomDirectoryUI() {
   }
 
   roomsOnFloor.forEach(room => {
+    // Calculate current simulated occupants (resting or walking inside)
+    let count = 0;
+    if (isHeatmapEnabled) {
+      count = simulatedAgents.filter(a => a.state === 'resting' && a.destRoomId === room.id).length +
+              simulatedAgents.filter(a => a.state === 'walking' && isPointInPolygon(a.latlng, room.latlngs)).length;
+    }
+    const isCrowded = count > 50;
+    const badgeClass = isCrowded ? 'room-dir-occupants crowded' : 'room-dir-occupants';
+
     const item = document.createElement('li');
     item.className = 'room-dir-item';
     item.innerHTML = `
       <div class="room-dir-info">
         <span class="room-dir-name">${room.name}</span>
-        <span class="room-dir-cat">${room.category}</span>
+        <span class="room-dir-cat">${room.category} <span class="${badgeClass}" id="occupancy-badge-${room.id}"><i class="fa-solid fa-users"></i> ${count}</span></span>
       </div>
       <div class="room-dir-actions">
         <button class="room-dir-btn zoom" title="Zoom to room"><i class="fa-solid fa-expand"></i></button>
@@ -940,6 +975,12 @@ function switchActiveFloor(floor) {
   
   // Update dropdown select menus
   updateNavigationRoomOptions();
+
+  // Restart crowd simulation for the new floor if heatmap is enabled
+  if (isHeatmapEnabled) {
+    stopCrowdSimulation();
+    startCrowdSimulation();
+  }
 
   // If a pending multi-floor route exists for this floor, draw it
   if (window.pendingDestinationPath && window.pendingDestinationPath.floor === floor) {
@@ -1449,5 +1490,216 @@ function runAStar(startLatLng, endLatLng, boundary, floor) {
   path[path.length - 1] = endLatLng;
   
   return path;
+}
+
+// --- CROWD TRAFFIC SIMULATOR & HEATMAP OVERLAY ---
+
+function initHeatmap() {
+  if (!heatmapLayer) {
+    // Custom gradient: blue -> cyan -> green -> yellow/orange -> red
+    heatmapLayer = L.heatLayer([], {
+      radius: 20,
+      blur: 15,
+      max: 5,
+      gradient: {
+        0.1: '#3b82f6', // Cool Blue
+        0.3: '#06b6d4', // Cyan
+        0.5: '#10b981', // Green (Normal traffic)
+        0.7: '#f59e0b', // Orange (Medium density: 16-50 people)
+        1.0: '#ef4444'  // Red (High density: >50 people)
+      }
+    }).addTo(map);
+  }
+}
+
+function startCrowdSimulation() {
+  stopCrowdSimulation();
+  
+  const boundary = savedBoundaries.find(b => b.floor === activeFloor);
+  if (!boundary) {
+    alert(`Please draw a Floor Boundary for Floor ${activeFloor} first to define the walkable simulation perimeter!`);
+    const checkboxHeatmap = document.getElementById('toggle-heatmap');
+    if (checkboxHeatmap) checkboxHeatmap.checked = false;
+    isHeatmapEnabled = false;
+    return;
+  }
+  
+  const roomsOnFloor = savedRooms.filter(r => r.floor === activeFloor);
+  if (roomsOnFloor.length < 2) {
+    alert("Please draw at least 2 rooms (with doors) on this floor to simulate traffic routing.");
+    const checkboxHeatmap = document.getElementById('toggle-heatmap');
+    if (checkboxHeatmap) checkboxHeatmap.checked = false;
+    isHeatmapEnabled = false;
+    return;
+  }
+  
+  const roomsWithDoors = roomsOnFloor.filter(room => savedDoors.some(d => d.roomId === room.id && d.floor === activeFloor));
+  if (roomsWithDoors.length < 2) {
+    alert("Please ensure at least 2 rooms on this floor have doors placed so agents can navigate between them.");
+    const checkboxHeatmap = document.getElementById('toggle-heatmap');
+    if (checkboxHeatmap) checkboxHeatmap.checked = false;
+    isHeatmapEnabled = false;
+    return;
+  }
+
+  showToast('Spawning crowd agents...');
+  
+  // Spawn 65 agents staggered by 30ms to prevent initial UI freeze
+  const numAgents = 65;
+  for (let i = 0; i < numAgents; i++) {
+    setTimeout(() => {
+      if (!isHeatmapEnabled || activeFloor !== boundary.floor) return;
+      
+      const startRoom = roomsWithDoors[Math.floor(Math.random() * roomsWithDoors.length)];
+      let destRoom = roomsWithDoors[Math.floor(Math.random() * roomsWithDoors.length)];
+      while (destRoom.id === startRoom.id && roomsWithDoors.length > 1) {
+        destRoom = roomsWithDoors[Math.floor(Math.random() * roomsWithDoors.length)];
+      }
+      
+      const startDoors = savedDoors.filter(d => d.roomId === startRoom.id && d.floor === activeFloor);
+      const endDoors = savedDoors.filter(d => d.roomId === destRoom.id && d.floor === activeFloor);
+      
+      if (startDoors.length > 0 && endDoors.length > 0) {
+        const path = runPathfindingOnFloor(startRoom, destRoom, activeFloor);
+        if (path) {
+          simulatedAgents.push({
+            id: 'agent-' + i,
+            path: path,
+            pathIndex: 0,
+            latlng: path[0],
+            state: 'walking',
+            restTicks: 0,
+            startRoomId: startRoom.id,
+            destRoomId: destRoom.id,
+            floor: activeFloor
+          });
+        }
+      }
+    }, i * 30);
+  }
+  
+  agentUpdateIntervalId = setInterval(updateAgents, 200);
+  heatmapUpdateIntervalId = setInterval(updateHeatmapData, 300);
+}
+
+function updateAgents() {
+  if (simulatedAgents.length === 0) return;
+  
+  const roomsOnFloor = savedRooms.filter(r => r.floor === activeFloor);
+  const roomsWithDoors = roomsOnFloor.filter(room => savedDoors.some(d => d.roomId === room.id && d.floor === activeFloor));
+  
+  simulatedAgents.forEach(agent => {
+    if (agent.floor !== activeFloor) return;
+    
+    if (agent.state === 'walking') {
+      agent.pathIndex++;
+      if (agent.pathIndex >= agent.path.length) {
+        agent.state = 'resting';
+        agent.restTicks = Math.floor(Math.random() * 25) + 10; // Rest for 2 to 7 seconds
+      } else {
+        agent.latlng = agent.path[agent.pathIndex];
+      }
+    } else if (agent.state === 'resting') {
+      agent.restTicks--;
+      if (agent.restTicks <= 0) {
+        const currentRoom = savedRooms.find(r => r.id === agent.destRoomId);
+        if (currentRoom && roomsWithDoors.length > 1) {
+          let destRoom = roomsWithDoors[Math.floor(Math.random() * roomsWithDoors.length)];
+          while (destRoom.id === currentRoom.id) {
+            destRoom = roomsWithDoors[Math.floor(Math.random() * roomsWithDoors.length)];
+          }
+          
+          const path = runPathfindingOnFloor(currentRoom, destRoom, activeFloor);
+          if (path) {
+            agent.path = path;
+            agent.pathIndex = 0;
+            agent.latlng = path[0];
+            agent.state = 'walking';
+            agent.startRoomId = currentRoom.id;
+            agent.destRoomId = destRoom.id;
+          }
+        }
+      }
+    }
+  });
+  
+  // Calculate occupancies
+  const occupancy = {};
+  roomsOnFloor.forEach(r => occupancy[r.id] = 0);
+  
+  simulatedAgents.forEach(agent => {
+    if (agent.state === 'resting') {
+      occupancy[agent.destRoomId] = (occupancy[agent.destRoomId] || 0) + 1;
+    } else {
+      for (const r of roomsOnFloor) {
+        if (isPointInPolygon(agent.latlng, r.latlngs)) {
+          occupancy[r.id] = (occupancy[r.id] || 0) + 1;
+          break;
+        }
+      }
+    }
+  });
+  
+  // Update room directory UI badges
+  roomsOnFloor.forEach(room => {
+    const count = occupancy[room.id] || 0;
+    const badge = document.getElementById(`occupancy-badge-${room.id}`);
+    if (badge) {
+      badge.innerHTML = `<i class="fa-solid fa-users"></i> ${count}`;
+      if (count > 50) {
+        badge.className = 'room-dir-occupants crowded';
+      } else {
+        badge.className = 'room-dir-occupants';
+      }
+    }
+  });
+}
+
+function updateHeatmapData() {
+  if (!heatmapLayer || !isHeatmapEnabled) return;
+  
+  const heatPoints = [];
+  
+  // 1. Add all simulated agents
+  simulatedAgents.forEach(agent => {
+    if (agent.floor === activeFloor) {
+      heatPoints.push([agent.latlng[0], agent.latlng[1], 1.2]);
+    }
+  });
+  
+  // 2. Add real user's location if simulation is active
+  if (isSimulatorEnabled && currentGpsCoords) {
+    heatPoints.push([currentGpsCoords.lat, currentGpsCoords.lng, 2.0]);
+  }
+  
+  heatmapLayer.setLatLngs(heatPoints);
+}
+
+function stopCrowdSimulation() {
+  if (agentUpdateIntervalId) {
+    clearInterval(agentUpdateIntervalId);
+    agentUpdateIntervalId = null;
+  }
+  if (heatmapUpdateIntervalId) {
+    clearInterval(heatmapUpdateIntervalId);
+    heatmapUpdateIntervalId = null;
+  }
+  simulatedAgents = [];
+  
+  // Reset directory badges
+  savedRooms.forEach(room => {
+    const badge = document.getElementById(`occupancy-badge-${room.id}`);
+    if (badge) {
+      badge.innerHTML = `<i class="fa-solid fa-users"></i> 0`;
+      badge.className = 'room-dir-occupants';
+    }
+  });
+}
+
+function removeHeatmap() {
+  if (heatmapLayer) {
+    map.removeLayer(heatmapLayer);
+    heatmapLayer = null;
+  }
 }
 
