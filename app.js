@@ -35,6 +35,7 @@ let heatmapLayer = null;
 let simulatedAgents = [];
 let agentUpdateIntervalId = null;
 let heatmapUpdateIntervalId = null;
+let roomOccupancies = {};
 
 // Leaflet Layer groups to host vectors on map
 let boundariesLayerGroup;
@@ -267,8 +268,7 @@ function checkIndoorProximity(lat, lng) {
       // Show "Maze Map Done" Celebration Notification overlay
       let countText = "";
       if (isHeatmapEnabled) {
-        const count = simulatedAgents.filter(a => a.state === 'resting' && a.destRoomId === containingRoom.id).length +
-                      simulatedAgents.filter(a => a.state === 'walking' && isPointInPolygon(a.latlng, containingRoom.latlngs)).length;
+        const count = roomOccupancies[containingRoom.id] || 0;
         countText = ` (Occupancy: ${count})`;
       }
       successRoomName.textContent = containingRoom.name + countText;
@@ -855,12 +855,8 @@ function updateRoomDirectoryUI() {
   }
 
   roomsOnFloor.forEach(room => {
-    // Calculate current simulated occupants (resting or walking inside)
-    let count = 0;
-    if (isHeatmapEnabled) {
-      count = simulatedAgents.filter(a => a.state === 'resting' && a.destRoomId === room.id).length +
-              simulatedAgents.filter(a => a.state === 'walking' && isPointInPolygon(a.latlng, room.latlngs)).length;
-    }
+    // Retrieve occupant count from the synchronized cache
+    const count = isHeatmapEnabled ? (roomOccupancies[room.id] || 0) : 0;
     const isCrowded = count > 50;
     const badgeClass = isCrowded ? 'room-dir-occupants crowded' : 'room-dir-occupants';
 
@@ -1497,12 +1493,13 @@ function runAStar(startLatLng, endLatLng, boundary, floor) {
 function initHeatmap() {
   if (!heatmapLayer) {
     // Custom gradient: blue -> cyan -> green -> yellow/orange -> red
+    // Expanded radius (35) and blur (20) to spread heat naturally over the floor area
     heatmapLayer = L.heatLayer([], {
-      radius: 20,
-      blur: 15,
+      radius: 35,
+      blur: 20,
       max: 5,
       gradient: {
-        0.1: '#3b82f6', // Cool Blue
+        0.1: '#3b82f6', // Cool Blue (Low traffic)
         0.3: '#06b6d4', // Cyan
         0.5: '#10b981', // Green (Normal traffic)
         0.7: '#f59e0b', // Orange (Medium density: 16-50 people)
@@ -1510,6 +1507,91 @@ function initHeatmap() {
       }
     }).addTo(map);
   }
+}
+
+// Generates smooth coordinates between grid cells
+function interpolatePath(path, stepsPerSegment = 5) {
+  if (path.length < 2) return path;
+  
+  const result = [];
+  for (let i = 0; i < path.length - 1; i++) {
+    const p1 = path[i];
+    const p2 = path[i + 1];
+    
+    for (let step = 0; step < stepsPerSegment; step++) {
+      const t = step / stepsPerSegment;
+      const lat = p1[0] + (p2[0] - p1[0]) * t;
+      const lng = p1[1] + (p2[1] - p1[1]) * t;
+      result.push([lat, lng]);
+    }
+  }
+  result.push(path[path.length - 1]);
+  return result;
+}
+
+// Generates smooth coordinates between two points
+function interpolateTwoPoints(p1, p2, steps = 5) {
+  if (!p1 || !p2) return [];
+  const result = [];
+  for (let step = 0; step < steps; step++) {
+    const t = step / steps;
+    const lat = p1[0] + (p2[0] - p1[0]) * t;
+    const lng = p1[1] + (p2[1] - p1[1]) * t;
+    result.push([lat, lng]);
+  }
+  return result;
+}
+
+// Selects a random point inside the room polygon using rejection sampling
+function getRandomPointInRoom(room) {
+  const vs = room.latlngs;
+  if (!vs || vs.length === 0) return null;
+  
+  let minLat = vs[0][0], maxLat = vs[0][0];
+  let minLng = vs[0][1], maxLng = vs[0][1];
+  for (let i = 1; i < vs.length; i++) {
+    const lat = vs[i][0];
+    const lng = vs[i][1];
+    if (lat < minLat) minLat = lat;
+    if (lat > maxLat) maxLat = lat;
+    if (lng < minLng) minLng = lng;
+    if (lng > maxLng) maxLng = lng;
+  }
+  
+  // Rejection sampling: try up to 30 times to find a point inside the polygon
+  for (let iter = 0; iter < 30; iter++) {
+    const lat = minLat + Math.random() * (maxLat - minLat);
+    const lng = minLng + Math.random() * (maxLng - minLng);
+    if (isPointInPolygon([lat, lng], vs)) {
+      return [lat, lng];
+    }
+  }
+  
+  // Fallback: calculate centroid of the room
+  let sumLat = 0, sumLng = 0;
+  vs.forEach(pt => {
+    sumLat += pt[0];
+    sumLng += pt[1];
+  });
+  return [sumLat / vs.length, sumLng / vs.length];
+}
+
+// Moves a coordinate towards a target by a maximum step size
+function moveTowards(current, target, maxStep) {
+  const dLat = target[0] - current[0];
+  const dLng = target[1] - current[1];
+  const dist = Math.sqrt(dLat * dLat + dLng * dLng);
+  if (dist <= maxStep) {
+    return { pos: target, reached: true };
+  }
+  const ratio = maxStep / dist;
+  return {
+    pos: [
+      current[0] + dLat * ratio,
+      current[1] + dLng * ratio
+    ],
+    reached: false
+  };
 }
 
 function startCrowdSimulation() {
@@ -1544,7 +1626,6 @@ function startCrowdSimulation() {
 
   showToast('Spawning crowd agents...');
   
-  // Spawn 65 agents staggered by 30ms to prevent initial UI freeze
   const numAgents = 65;
   for (let i = 0; i < numAgents; i++) {
     setTimeout(() => {
@@ -1560,26 +1641,48 @@ function startCrowdSimulation() {
       const endDoors = savedDoors.filter(d => d.roomId === destRoom.id && d.floor === activeFloor);
       
       if (startDoors.length > 0 && endDoors.length > 0) {
-        const path = runPathfindingOnFloor(startRoom, destRoom, activeFloor);
-        if (path) {
+        const rawPath = runPathfindingOnFloor(startRoom, destRoom, activeFloor);
+        if (rawPath) {
+          const startDoor = startDoors[0].latlng;
+          const endDoor = endDoors[0].latlng;
+          
+          const spawnLatLng = getRandomPointInRoom(startRoom);
+          const destLatLng = getRandomPointInRoom(destRoom);
+          
+          const roomEnterPath = interpolateTwoPoints(spawnLatLng, startDoor, 5);
+          const hallwayPath = interpolatePath(rawPath, 5);
+          const roomExitPath = interpolateTwoPoints(endDoor, destLatLng, 5);
+          
+          const fullPath = [...roomEnterPath, ...hallwayPath, ...roomExitPath];
+          
+          // Persistent random offset (+/- 2.5 meters in degrees) 
+          // to spread agents across the entire width of hallways and rooms
+          const offsetLat = (Math.random() - 0.5) * 0.000045;
+          const offsetLng = (Math.random() - 0.5) * 0.000045;
+          
           simulatedAgents.push({
             id: 'agent-' + i,
-            path: path,
+            path: fullPath,
             pathIndex: 0,
-            latlng: path[0],
+            latlng: fullPath[0],
             state: 'walking',
             restTicks: 0,
             startRoomId: startRoom.id,
             destRoomId: destRoom.id,
-            floor: activeFloor
+            floor: activeFloor,
+            offsetLat: offsetLat,
+            offsetLng: offsetLng,
+            roomTargetLatLng: null,
+            pauseTicks: 0
           });
         }
       }
     }, i * 30);
   }
   
-  agentUpdateIntervalId = setInterval(updateAgents, 200);
-  heatmapUpdateIntervalId = setInterval(updateHeatmapData, 300);
+  // Real-time ticking updates at 60ms (approx. 16 frames/second)
+  agentUpdateIntervalId = setInterval(updateAgents, 60);
+  heatmapUpdateIntervalId = setInterval(updateHeatmapData, 60);
 }
 
 function updateAgents() {
@@ -1595,7 +1698,9 @@ function updateAgents() {
       agent.pathIndex++;
       if (agent.pathIndex >= agent.path.length) {
         agent.state = 'resting';
-        agent.restTicks = Math.floor(Math.random() * 25) + 10; // Rest for 2 to 7 seconds
+        agent.restTicks = Math.floor(Math.random() * 250) + 150; // Rest for 9-24 seconds (60ms ticks)
+        agent.roomTargetLatLng = null;
+        agent.pauseTicks = 0;
       } else {
         agent.latlng = agent.path[agent.pathIndex];
       }
@@ -1609,38 +1714,86 @@ function updateAgents() {
             destRoom = roomsWithDoors[Math.floor(Math.random() * roomsWithDoors.length)];
           }
           
-          const path = runPathfindingOnFloor(currentRoom, destRoom, activeFloor);
-          if (path) {
-            agent.path = path;
-            agent.pathIndex = 0;
-            agent.latlng = path[0];
-            agent.state = 'walking';
-            agent.startRoomId = currentRoom.id;
-            agent.destRoomId = destRoom.id;
+          const rawPath = runPathfindingOnFloor(currentRoom, destRoom, activeFloor);
+          if (rawPath) {
+            const currentDoors = savedDoors.filter(d => d.roomId === currentRoom.id && d.floor === activeFloor);
+            const destDoors = savedDoors.filter(d => d.roomId === destRoom.id && d.floor === activeFloor);
+            
+            if (currentDoors.length > 0 && destDoors.length > 0) {
+              const startDoor = currentDoors[0].latlng;
+              const endDoor = destDoors[0].latlng;
+              
+              const spawnLatLng = agent.latlng;
+              const destLatLng = getRandomPointInRoom(destRoom);
+              
+              const roomEnterPath = interpolateTwoPoints(spawnLatLng, startDoor, 5);
+              const hallwayPath = interpolatePath(rawPath, 5);
+              const roomExitPath = interpolateTwoPoints(endDoor, destLatLng, 5);
+              
+              agent.path = [...roomEnterPath, ...hallwayPath, ...roomExitPath];
+              agent.pathIndex = 0;
+              agent.latlng = agent.path[0];
+              agent.state = 'walking';
+              agent.startRoomId = currentRoom.id;
+              agent.destRoomId = destRoom.id;
+            }
+          }
+        }
+      } else {
+        // Mosey/mill around inside the room
+        const currentRoom = savedRooms.find(r => r.id === agent.destRoomId);
+        if (currentRoom) {
+          if (agent.pauseTicks > 0) {
+            agent.pauseTicks--;
+          } else {
+            if (!agent.roomTargetLatLng) {
+              if (Math.random() < 0.15) {
+                agent.pauseTicks = Math.floor(Math.random() * 40) + 15; // Pause for 1-3 seconds
+              } else {
+                agent.roomTargetLatLng = getRandomPointInRoom(currentRoom);
+              }
+            }
+            
+            if (agent.roomTargetLatLng) {
+              // Walk towards room target coordinate
+              const stepSize = 0.000003 + Math.random() * 0.000002;
+              const result = moveTowards(agent.latlng, agent.roomTargetLatLng, stepSize);
+              agent.latlng = result.pos;
+              if (result.reached) {
+                agent.roomTargetLatLng = null;
+              }
+            }
           }
         }
       }
     }
   });
   
-  // Calculate occupancies
+  // Calculate occupancies based on active agent coordinates (with offsets)
   const occupancy = {};
   roomsOnFloor.forEach(r => occupancy[r.id] = 0);
   
   simulatedAgents.forEach(agent => {
-    if (agent.state === 'resting') {
-      occupancy[agent.destRoomId] = (occupancy[agent.destRoomId] || 0) + 1;
-    } else {
-      for (const r of roomsOnFloor) {
-        if (isPointInPolygon(agent.latlng, r.latlngs)) {
-          occupancy[r.id] = (occupancy[r.id] || 0) + 1;
-          break;
-        }
+    if (agent.floor !== activeFloor) return;
+    const actualPt = [agent.latlng[0] + agent.offsetLat, agent.latlng[1] + agent.offsetLng];
+    
+    let foundRoom = false;
+    for (const r of roomsOnFloor) {
+      if (isPointInPolygon(actualPt, r.latlngs)) {
+        occupancy[r.id] = (occupancy[r.id] || 0) + 1;
+        foundRoom = true;
+        break;
       }
+    }
+    if (!foundRoom && agent.state === 'resting') {
+      occupancy[agent.destRoomId] = (occupancy[agent.destRoomId] || 0) + 1;
     }
   });
   
-  // Update room directory UI badges
+  // Cache globally for UI updates
+  roomOccupancies = occupancy;
+  
+  // Update UI badges
   roomsOnFloor.forEach(room => {
     const count = occupancy[room.id] || 0;
     const badge = document.getElementById(`occupancy-badge-${room.id}`);
@@ -1660,10 +1813,13 @@ function updateHeatmapData() {
   
   const heatPoints = [];
   
-  // 1. Add all simulated agents
+  // 1. Add simulated agents with their persistent lateral offsets
+  // to spread heat across the entire width of hallways and rooms
   simulatedAgents.forEach(agent => {
     if (agent.floor === activeFloor) {
-      heatPoints.push([agent.latlng[0], agent.latlng[1], 1.2]);
+      const displayLat = agent.latlng[0] + agent.offsetLat;
+      const displayLng = agent.latlng[1] + agent.offsetLng;
+      heatPoints.push([displayLat, displayLng, 1.2]);
     }
   });
   
@@ -1685,6 +1841,7 @@ function stopCrowdSimulation() {
     heatmapUpdateIntervalId = null;
   }
   simulatedAgents = [];
+  roomOccupancies = {};
   
   // Reset directory badges
   savedRooms.forEach(room => {
