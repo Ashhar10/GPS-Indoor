@@ -106,12 +106,12 @@
           </div>
           <div style="border-top: 1px solid var(--border-color); margin-top: 8px; padding-top: 8px;">
             <label class="checkbox-container" style="margin-bottom: 0;">
-              <input type="checkbox" id="toggle-heatmap">
+              <input type="checkbox" id="toggle-crowd-analytics">
               <span class="checkmark"></span>
-              <i class="fa-solid fa-fire" style="color: var(--warning);"></i> Enable Traffic Heatmap
+              <i class="fa-solid fa-users" style="color: var(--warning);"></i> Enable Crowd Analytics
             </label>
-            <!-- Traffic Heatmap Configuration HUD -->
-            <div id="heatmap-config-hud" style="display: none; margin-top: 10px; flex-direction: column; gap: 8px; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 8px;">
+            <!-- Traffic Crowd Analytics Configuration HUD -->
+            <div id="crowd-config-hud" style="display: none; margin-top: 10px; flex-direction: column; gap: 8px; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 8px;">
               <!-- Source Selector (Simulation vs Live DensePose) -->
               <div class="source-toggle-container">
                 <button class="source-btn active" id="source-btn-simulation" data-source="simulation" type="button">
@@ -276,8 +276,7 @@
 
   <!-- Leaflet JS -->
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
-  <!-- Leaflet Heatmap Plugin -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.heat/0.2.0/leaflet-heat.js"></script>
+
   <!-- App JS -->
   <script src="app.js"></script>
 </body>

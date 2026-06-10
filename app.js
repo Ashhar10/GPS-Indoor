@@ -3,15 +3,7 @@
  * Core Logic Module
  */
 
-// --- Chrome Canvas willReadFrequently Optimization ---
-const originalGetContext = HTMLCanvasElement.prototype.getContext;
-HTMLCanvasElement.prototype.getContext = function (type, attributes) {
-  if (type === '2d') {
-    attributes = attributes || {};
-    attributes.willReadFrequently = true;
-  }
-  return originalGetContext.call(this, type, attributes);
-};
+
 
 // --- Map Layers & State ---
 let map;
@@ -39,12 +31,10 @@ let savedWindows = [];
 let savedDoors = [];
 let activeFloor = '1';
 
-// Heatmap and Crowd Simulation state
-let isHeatmapEnabled = false;
-let heatmapLayer = null;
+// Crowd Simulation & Tracking state
+let isCrowdAnalyticsEnabled = false;
 let simulatedAgents = [];
 let agentUpdateIntervalId = null;
-let heatmapUpdateIntervalId = null;
 let roomOccupancies = {};
 let simulatedHour = 10;
 
@@ -114,7 +104,7 @@ const simTimeDisplay = document.getElementById('sim-time-display');
 const simTimeDesc = document.getElementById('sim-time-desc');
 
 // Live DensePose HUD Elements
-const heatmapConfigHud = document.getElementById('heatmap-config-hud');
+const crowdConfigHud = document.getElementById('crowd-config-hud');
 const btnSourceSimulation = document.getElementById('source-btn-simulation');
 const btnSourceLive = document.getElementById('source-btn-live');
 const heatmapLiveControl = document.getElementById('heatmap-live-control');
@@ -298,7 +288,7 @@ function checkIndoorProximity(lat, lng) {
       
       // Show "Maze Map Done" Celebration Notification overlay
       let countText = "";
-      if (isHeatmapEnabled) {
+      if (isCrowdAnalyticsEnabled) {
         const count = roomOccupancies[containingRoom.id] || 0;
         countText = ` (Occupancy: ${count})`;
       }
@@ -477,22 +467,23 @@ function setupUIEventListeners() {
   btnClearPath.addEventListener('click', clearNavigationPath);
 
   // Traffic Heatmap Toggle Switch
-  const checkboxHeatmap = document.getElementById('toggle-heatmap');
-  checkboxHeatmap.addEventListener('change', (e) => {
-    isHeatmapEnabled = e.target.checked;
-    if (isHeatmapEnabled) {
-      initHeatmap();
-      if (activeTrafficSource === 'simulation') {
-        startCrowdSimulation();
+  // Crowd Analytics Toggle Switch
+  const checkboxCrowdAnalytics = document.getElementById('toggle-crowd-analytics');
+  if (checkboxCrowdAnalytics) {
+    checkboxCrowdAnalytics.addEventListener('change', (e) => {
+      isCrowdAnalyticsEnabled = e.target.checked;
+      if (isCrowdAnalyticsEnabled) {
+        if (activeTrafficSource === 'simulation') {
+          startCrowdSimulation();
+        }
+        if (crowdConfigHud) crowdConfigHud.style.display = 'flex';
+      } else {
+        stopCrowdSimulation();
+        disconnectLiveWS();
+        if (crowdConfigHud) crowdConfigHud.style.display = 'none';
       }
-      if (heatmapConfigHud) heatmapConfigHud.style.display = 'flex';
-    } else {
-      stopCrowdSimulation();
-      disconnectLiveWS();
-      removeHeatmap();
-      if (heatmapConfigHud) heatmapConfigHud.style.display = 'none';
-    }
-  });
+    });
+  }
 
   // Heatmap Source Toggle Buttons
   if (btnSourceSimulation && btnSourceLive) {
@@ -508,8 +499,7 @@ function setupUIEventListeners() {
       
       disconnectLiveWS();
       
-      if (isHeatmapEnabled) {
-        initHeatmap();
+      if (isCrowdAnalyticsEnabled) {
         startCrowdSimulation();
       }
     });
@@ -525,7 +515,6 @@ function setupUIEventListeners() {
       if (heatmapLiveControl) heatmapLiveControl.style.display = 'flex';
       
       stopCrowdSimulation();
-      if (heatmapLayer) heatmapLayer.setLatLngs([]);
       
       // Clear room occupancy badges to 0 until WebSocket payload arrives
       savedRooms.forEach(room => {
@@ -972,7 +961,7 @@ function updateRoomDirectoryUI() {
 
   roomsOnFloor.forEach(room => {
     // Retrieve occupant count from the synchronized cache
-    const count = isHeatmapEnabled ? (roomOccupancies[room.id] || 0) : 0;
+    const count = isCrowdAnalyticsEnabled ? (roomOccupancies[room.id] || 0) : 0;
     const isCrowded = count > 10;
     const badgeClass = isCrowded ? 'room-dir-occupants crowded' : 'room-dir-occupants';
 
@@ -1088,15 +1077,12 @@ function switchActiveFloor(floor) {
   // Update dropdown select menus
   updateNavigationRoomOptions();
 
-  // Restart crowd simulation or reset live data for the new floor if heatmap is enabled
-  if (isHeatmapEnabled) {
+  // Restart crowd simulation or reset live data for the new floor if crowd analytics is enabled
+  if (isCrowdAnalyticsEnabled) {
     if (activeTrafficSource === 'simulation') {
       stopCrowdSimulation(false);
       startCrowdSimulation();
     } else {
-      if (heatmapLayer) {
-        heatmapLayer.setLatLngs([]);
-      }
       roomOccupancies = {};
       updateRoomDirectoryUI();
     }
@@ -1805,27 +1791,27 @@ function startCrowdSimulation() {
   const boundary = savedBoundaries.find(b => b.floor === activeFloor);
   if (!boundary) {
     alert(`Please draw a Floor Boundary for Floor ${activeFloor} first to define the walkable simulation perimeter!`);
-    const checkboxHeatmap = document.getElementById('toggle-heatmap');
-    if (checkboxHeatmap) checkboxHeatmap.checked = false;
-    isHeatmapEnabled = false;
+    const checkboxCrowdAnalytics = document.getElementById('toggle-crowd-analytics');
+    if (checkboxCrowdAnalytics) checkboxCrowdAnalytics.checked = false;
+    isCrowdAnalyticsEnabled = false;
     return;
   }
   
   const roomsOnFloor = savedRooms.filter(r => r.floor === activeFloor);
   if (roomsOnFloor.length < 2) {
     alert("Please draw at least 2 rooms (with doors) on this floor to simulate traffic routing.");
-    const checkboxHeatmap = document.getElementById('toggle-heatmap');
-    if (checkboxHeatmap) checkboxHeatmap.checked = false;
-    isHeatmapEnabled = false;
+    const checkboxCrowdAnalytics = document.getElementById('toggle-crowd-analytics');
+    if (checkboxCrowdAnalytics) checkboxCrowdAnalytics.checked = false;
+    isCrowdAnalyticsEnabled = false;
     return;
   }
   
   const roomsWithDoors = roomsOnFloor.filter(room => savedDoors.some(d => d.roomId === room.id && d.floor === activeFloor));
   if (roomsWithDoors.length < 2) {
     alert("Please ensure at least 2 rooms on this floor have doors placed so agents can navigate between them.");
-    const checkboxHeatmap = document.getElementById('toggle-heatmap');
-    if (checkboxHeatmap) checkboxHeatmap.checked = false;
-    isHeatmapEnabled = false;
+    const checkboxCrowdAnalytics = document.getElementById('toggle-crowd-analytics');
+    if (checkboxCrowdAnalytics) checkboxCrowdAnalytics.checked = false;
+    isCrowdAnalyticsEnabled = false;
     return;
   }
 
@@ -1834,7 +1820,7 @@ function startCrowdSimulation() {
   const numAgents = 65;
   for (let i = 0; i < numAgents; i++) {
     setTimeout(() => {
-      if (!isHeatmapEnabled || activeFloor !== boundary.floor) return;
+      if (!isCrowdAnalyticsEnabled || activeFloor !== boundary.floor) return;
       
       const startRoom = roomsWithDoors[Math.floor(Math.random() * roomsWithDoors.length)];
       let destRoom = selectDestinationRoomBySchedule(roomsWithDoors, simulatedHour);
@@ -1887,7 +1873,6 @@ function startCrowdSimulation() {
   
   // Real-time ticking updates at 60ms (approx. 16 frames/second)
   agentUpdateIntervalId = setInterval(updateAgents, 60);
-  heatmapUpdateIntervalId = setInterval(updateHeatmapData, 60);
 }
 
 function updateAgents() {
@@ -2019,37 +2004,10 @@ function updateAgents() {
   });
 }
 
-function updateHeatmapData() {
-  if (!heatmapLayer || !isHeatmapEnabled) return;
-  
-  const heatPoints = [];
-  
-  // 1. Add simulated agents with their persistent lateral offsets
-  // to spread heat across the entire width of hallways and rooms
-  simulatedAgents.forEach(agent => {
-    if (agent.floor === activeFloor) {
-      const displayLat = agent.latlng[0] + agent.offsetLat;
-      const displayLng = agent.latlng[1] + agent.offsetLng;
-      heatPoints.push([displayLat, displayLng, 1.2]);
-    }
-  });
-  
-  // 2. Add real user's location if simulation is active
-  if (isSimulatorEnabled && currentGpsCoords) {
-    heatPoints.push([currentGpsCoords.lat, currentGpsCoords.lng, 2.0]);
-  }
-  
-  heatmapLayer.setLatLngs(heatPoints);
-}
-
 function stopCrowdSimulation(resetClock = true) {
   if (agentUpdateIntervalId) {
     clearInterval(agentUpdateIntervalId);
     agentUpdateIntervalId = null;
-  }
-  if (heatmapUpdateIntervalId) {
-    clearInterval(heatmapUpdateIntervalId);
-    heatmapUpdateIntervalId = null;
   }
   simulatedAgents = [];
   roomOccupancies = {};
@@ -2069,13 +2027,6 @@ function stopCrowdSimulation(resetClock = true) {
       badge.className = 'room-dir-occupants';
     }
   });
-}
-
-function removeHeatmap() {
-  if (heatmapLayer) {
-    map.removeLayer(heatmapLayer);
-    heatmapLayer = null;
-  }
 }
 
 // --- WebSocket Real-Time Tracking Core ---
@@ -2132,7 +2083,7 @@ function connectToLiveWS() {
     };
     
     liveWebSocket.onmessage = (event) => {
-      if (!isHeatmapEnabled || activeTrafficSource !== 'live') return;
+      if (!isCrowdAnalyticsEnabled || activeTrafficSource !== 'live') return;
       
       try {
         const message = JSON.parse(event.data);
@@ -2142,10 +2093,6 @@ function connectToLiveWS() {
           const points = message.points.map(pt => {
             return [pt[0], pt[1], pt[2] || 1.2];
           });
-          
-          if (heatmapLayer) {
-            heatmapLayer.setLatLngs(points);
-          }
           
           // Re-calculate room occupancy client-side based on these coordinates
           calculateLiveOccupancies(points);
