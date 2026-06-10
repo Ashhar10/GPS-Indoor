@@ -38,6 +38,11 @@ let heatmapUpdateIntervalId = null;
 let roomOccupancies = {};
 let simulatedHour = 10;
 
+// Live Camera (DensePose) WebSocket state
+let activeTrafficSource = 'simulation'; // 'simulation' or 'live'
+let liveWebSocket = null;
+let liveWsUrl = 'ws://localhost:8080';
+
 // Leaflet Layer groups to host vectors on map
 let boundariesLayerGroup;
 let roomsLayerGroup;
@@ -97,6 +102,15 @@ const heatmapTimeControl = document.getElementById('heatmap-time-control');
 const simTimeSlider = document.getElementById('sim-time-slider');
 const simTimeDisplay = document.getElementById('sim-time-display');
 const simTimeDesc = document.getElementById('sim-time-desc');
+
+// Live DensePose HUD Elements
+const heatmapConfigHud = document.getElementById('heatmap-config-hud');
+const btnSourceSimulation = document.getElementById('source-btn-simulation');
+const btnSourceLive = document.getElementById('source-btn-live');
+const heatmapLiveControl = document.getElementById('heatmap-live-control');
+const liveConnectionStatus = document.getElementById('live-connection-status');
+const liveWsUrlInput = document.getElementById('live-ws-url-input');
+const btnToggleLiveConn = document.getElementById('btn-toggle-live-conn');
 
 const toolButtons = {
   select: document.getElementById('tool-select'),
@@ -458,14 +472,72 @@ function setupUIEventListeners() {
     isHeatmapEnabled = e.target.checked;
     if (isHeatmapEnabled) {
       initHeatmap();
-      startCrowdSimulation();
-      if (heatmapTimeControl) heatmapTimeControl.style.display = 'flex';
+      if (activeTrafficSource === 'simulation') {
+        startCrowdSimulation();
+      }
+      if (heatmapConfigHud) heatmapConfigHud.style.display = 'flex';
     } else {
       stopCrowdSimulation();
+      disconnectLiveWS();
       removeHeatmap();
-      if (heatmapTimeControl) heatmapTimeControl.style.display = 'none';
+      if (heatmapConfigHud) heatmapConfigHud.style.display = 'none';
     }
   });
+
+  // Heatmap Source Toggle Buttons
+  if (btnSourceSimulation && btnSourceLive) {
+    btnSourceSimulation.addEventListener('click', () => {
+      if (activeTrafficSource === 'simulation') return;
+      activeTrafficSource = 'simulation';
+      
+      btnSourceSimulation.classList.add('active');
+      btnSourceLive.classList.remove('active');
+      
+      if (heatmapLiveControl) heatmapLiveControl.style.display = 'none';
+      if (heatmapTimeControl) heatmapTimeControl.style.display = 'flex';
+      
+      disconnectLiveWS();
+      
+      if (isHeatmapEnabled) {
+        initHeatmap();
+        startCrowdSimulation();
+      }
+    });
+
+    btnSourceLive.addEventListener('click', () => {
+      if (activeTrafficSource === 'live') return;
+      activeTrafficSource = 'live';
+      
+      btnSourceLive.classList.add('active');
+      btnSourceSimulation.classList.remove('active');
+      
+      if (heatmapTimeControl) heatmapTimeControl.style.display = 'none';
+      if (heatmapLiveControl) heatmapLiveControl.style.display = 'flex';
+      
+      stopCrowdSimulation();
+      if (heatmapLayer) heatmapLayer.setLatLngs([]);
+      
+      // Clear room occupancy badges to 0 until WebSocket payload arrives
+      savedRooms.forEach(room => {
+        const badge = document.getElementById(`occupancy-badge-${room.id}`);
+        if (badge) {
+          badge.innerHTML = `<i class="fa-solid fa-users"></i> 0`;
+          badge.className = 'room-dir-occupants';
+        }
+      });
+    });
+  }
+
+  // Connect/Disconnect Button for Live DensePose
+  if (btnToggleLiveConn) {
+    btnToggleLiveConn.addEventListener('click', () => {
+      if (liveWebSocket && (liveWebSocket.readyState === WebSocket.OPEN || liveWebSocket.readyState === WebSocket.CONNECTING)) {
+        disconnectLiveWS();
+      } else {
+        connectToLiveWS();
+      }
+    });
+  }
 
   // Time of Day Slider Listener
   if (simTimeSlider) {
@@ -1006,10 +1078,18 @@ function switchActiveFloor(floor) {
   // Update dropdown select menus
   updateNavigationRoomOptions();
 
-  // Restart crowd simulation for the new floor if heatmap is enabled
+  // Restart crowd simulation or reset live data for the new floor if heatmap is enabled
   if (isHeatmapEnabled) {
-    stopCrowdSimulation(false);
-    startCrowdSimulation();
+    if (activeTrafficSource === 'simulation') {
+      stopCrowdSimulation(false);
+      startCrowdSimulation();
+    } else {
+      if (heatmapLayer) {
+        heatmapLayer.setLatLngs([]);
+      }
+      roomOccupancies = {};
+      updateRoomDirectoryUI();
+    }
   }
 
   // If a pending multi-floor route exists for this floor, draw it
@@ -1986,5 +2066,145 @@ function removeHeatmap() {
     map.removeLayer(heatmapLayer);
     heatmapLayer = null;
   }
+}
+
+// --- WebSocket Real-Time Tracking Core ---
+function updateWsStatus(status) {
+  if (!liveConnectionStatus) return;
+  
+  // Remove existing status classes
+  liveConnectionStatus.classList.remove('disconnected', 'connecting', 'connected');
+  
+  if (status === 'disconnected') {
+    liveConnectionStatus.classList.add('disconnected');
+    liveConnectionStatus.innerHTML = '<span class="status-dot"></span> Disconnected';
+    if (btnToggleLiveConn) {
+      btnToggleLiveConn.textContent = 'Connect';
+      btnToggleLiveConn.classList.remove('danger');
+      btnToggleLiveConn.classList.add('primary');
+    }
+  } else if (status === 'connecting') {
+    liveConnectionStatus.classList.add('connecting');
+    liveConnectionStatus.innerHTML = '<span class="status-dot"></span> Connecting';
+    if (btnToggleLiveConn) {
+      btnToggleLiveConn.textContent = 'Cancel';
+      btnToggleLiveConn.classList.remove('primary');
+      btnToggleLiveConn.classList.add('danger');
+    }
+  } else if (status === 'connected') {
+    liveConnectionStatus.classList.add('connected');
+    liveConnectionStatus.innerHTML = '<span class="status-dot"></span> Connected';
+    if (btnToggleLiveConn) {
+      btnToggleLiveConn.textContent = 'Disconnect';
+      btnToggleLiveConn.classList.remove('primary');
+      btnToggleLiveConn.classList.add('danger');
+    }
+  }
+}
+
+function connectToLiveWS() {
+  if (liveWebSocket) {
+    disconnectLiveWS();
+  }
+  
+  const url = (liveWsUrlInput ? liveWsUrlInput.value.trim() : '') || 'ws://localhost:8080';
+  liveWsUrl = url;
+  
+  showToast(`Connecting to ${url}...`);
+  updateWsStatus('connecting');
+  
+  try {
+    liveWebSocket = new WebSocket(url);
+    
+    liveWebSocket.onopen = () => {
+      showToast('Connected to DensePose tracking server!');
+      updateWsStatus('connected');
+    };
+    
+    liveWebSocket.onmessage = (event) => {
+      if (!isHeatmapEnabled || activeTrafficSource !== 'live') return;
+      
+      try {
+        const message = JSON.parse(event.data);
+        
+        if (message.type === 'heatmap') {
+          // message.points = [[lat, lng], [lat, lng, weight], ...]
+          const points = message.points.map(pt => {
+            return [pt[0], pt[1], pt[2] || 1.2];
+          });
+          
+          if (heatmapLayer) {
+            heatmapLayer.setLatLngs(points);
+          }
+          
+          // Re-calculate room occupancy client-side based on these coordinates
+          calculateLiveOccupancies(points);
+        } else if (message.type === 'occupancy') {
+          // Direct room occupancy updates from server
+          roomOccupancies = message.occupancy;
+          updateRoomDirectoryUI();
+        }
+      } catch (err) {
+        console.error('Error parsing WebSocket message:', err);
+      }
+    };
+    
+    liveWebSocket.onerror = (error) => {
+      console.error('WebSocket error:', error);
+      showToast('Connection error. Check console / server.');
+      updateWsStatus('disconnected');
+    };
+    
+    liveWebSocket.onclose = () => {
+      showToast('Disconnected from tracking server.');
+      updateWsStatus('disconnected');
+      liveWebSocket = null;
+    };
+    
+  } catch (err) {
+    console.error('WebSocket initialization error:', err);
+    showToast('Failed to connect.');
+    updateWsStatus('disconnected');
+  }
+}
+
+function disconnectLiveWS() {
+  if (liveWebSocket) {
+    liveWebSocket.close();
+    liveWebSocket = null;
+  }
+  updateWsStatus('disconnected');
+}
+
+// Calculates room occupancy client-side based on live coordinate list
+function calculateLiveOccupancies(points) {
+  const roomsOnFloor = savedRooms.filter(r => r.floor === activeFloor);
+  const occupancy = {};
+  roomsOnFloor.forEach(r => occupancy[r.id] = 0);
+  
+  points.forEach(pt => {
+    for (const r of roomsOnFloor) {
+      if (isPointInPolygon([pt[0], pt[1]], r.latlngs)) {
+        occupancy[r.id] = (occupancy[r.id] || 0) + 1;
+        break;
+      }
+    }
+  });
+  
+  roomOccupancies = occupancy;
+  
+  // Update UI badges
+  roomsOnFloor.forEach(room => {
+    const count = occupancy[room.id] || 0;
+    const badge = document.getElementById(`occupancy-badge-${room.id}`);
+    if (badge) {
+      badge.innerHTML = `<i class="fa-solid fa-users"></i> ${count}`;
+      if (count > 10) {
+        badge.className = 'room-dir-occupants crowded';
+      } else {
+        badge.className = 'room-dir-occupants';
+      }
+    }
+  });
 }
 
