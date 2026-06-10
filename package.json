@@ -1,0 +1,13 @@
+{
+  "name": "gps-indoor-mapper-server",
+  "version": "1.0.0",
+  "description": "Mock WebSocket server for DensePose indoor crowd tracking",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {}
+}
