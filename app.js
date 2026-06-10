@@ -3,6 +3,16 @@
  * Core Logic Module
  */
 
+// --- Chrome Canvas willReadFrequently Optimization ---
+const originalGetContext = HTMLCanvasElement.prototype.getContext;
+HTMLCanvasElement.prototype.getContext = function (type, attributes) {
+  if (type === '2d') {
+    attributes = attributes || {};
+    attributes.willReadFrequently = true;
+  }
+  return originalGetContext.call(this, type, attributes);
+};
+
 // --- Map Layers & State ---
 let map;
 let darkLayer;
