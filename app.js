@@ -478,10 +478,16 @@ function setupUIEventListeners() {
     } else {
       const hostname = window.location.hostname;
       const isLocal = hostname === 'localhost' || hostname === '127.0.0.1' || hostname.startsWith('192.168.') || hostname.startsWith('10.') || hostname.startsWith('172.');
+      const isVercel = hostname.endsWith('.vercel.app') || hostname.includes('vercel');
+      
       if (isLocal) {
         wifiScannerIpInput.value = hostname + ':8080';
+      } else if (isVercel) {
+        // Vercel cannot host WebSockets, so prompt the user to input their Render backend URL
+        wifiScannerIpInput.value = '';
+        wifiScannerIpInput.placeholder = 'your-backend.onrender.com';
       } else {
-        // Default to the current hostname/port if loaded from a public domain (like Render or Vercel)
+        // Default to the current hostname/port if loaded from a public domain (like Render)
         wifiScannerIpInput.value = window.location.host;
       }
     }
@@ -1560,6 +1566,17 @@ function connectToWifiWS() {
   
   try {
     let serverAddr = wifiScannerIpInput ? wifiScannerIpInput.value.trim() : '';
+    
+    // Check if we are hosted on Vercel and the input is empty or points to Vercel
+    const hostname = window.location.hostname;
+    const isVercel = hostname.endsWith('.vercel.app') || hostname.includes('vercel');
+    
+    if (isVercel && (!serverAddr || serverAddr.includes('vercel.app'))) {
+      showToast('Vercel does not support WebSockets. Please enter your Render Backend URL!');
+      updateWifiWsStatus('disconnected');
+      return;
+    }
+    
     if (!serverAddr) {
       serverAddr = window.location.host || '127.0.0.1:8080';
     }
@@ -1657,7 +1674,11 @@ function connectToWifiWS() {
     
     wifiWebSocket.onerror = (error) => {
       console.error('WebSocket error:', error);
-      showToast('WiFi scanner server connection error.');
+      if (wsUrl.includes('vercel.app')) {
+        showToast('WebSocket error: Vercel does not support WebSockets. Set Server Address to Render URL.');
+      } else {
+        showToast('WiFi scanner server connection error.');
+      }
       updateWifiWsStatus('disconnected');
     };
     
