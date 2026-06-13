@@ -531,6 +531,10 @@ function setupUIEventListeners() {
         localStorage.setItem('mazemap_wifi_filter_respective', false);
       }
       
+      // Clear current display to avoid showing old data from a different network
+      if (heatmapLayer) heatmapLayer.setLatLngs([]);
+      updateWifiDevicesUI([], 'loading', 'Waiting for data from selected network...');
+      
       if (lastWifiScannerMessage) {
         processWifiScannerMessage(lastWifiScannerMessage);
       }
@@ -1779,38 +1783,55 @@ function processWifiScannerMessage(message) {
 
   // ── Respective Network Filter Logic ──────────────────────────────────
   let filterToUse = activeSubnetFilter;
+  let targetAgentIp = 'any';
+  let targetSubnetPrefix = 'all';
+
+  if (filterToUse !== 'all') {
+    if (filterToUse.includes('|')) {
+      [targetAgentIp, targetSubnetPrefix] = filterToUse.split('|');
+    } else {
+      // Legacy or simple subnet filter
+      targetSubnetPrefix = filterToUse;
+    }
+  }
 
   if (wifiFilterRespective && wifiFilterRespective.checked) {
     // Priority 1: We have a verified subnet from the local server client-info handshake
-    if (detectedClientSubnetPrefix) {
-      filterToUse = detectedClientSubnetPrefix;
-    } else {
+    let detectedPrefix = detectedClientSubnetPrefix;
+    if (!detectedPrefix) {
       // Priority 2: Guess from the scanned subnets list of all active agents
       const allAvailableSubnets = [];
       activeAgents.forEach(a => (a.networks || []).forEach(n => allAvailableSubnets.push(n.subnetPrefix)));
-      filterToUse = detectRespectiveSubnet(allAvailableSubnets);
+      detectedPrefix = detectRespectiveSubnet(allAvailableSubnets);
     }
 
-    // Sync dropdown to this filter
-    if (wifiNetworkFilter && wifiNetworkFilter.value !== filterToUse) {
-      wifiNetworkFilter.value = filterToUse;
-      activeSubnetFilter = filterToUse;
-      localStorage.setItem('mazemap_wifi_subnet_filter', filterToUse);
-    }
-
-    // ── DIFFERENT NETWORK DETECTION ──────────────────────────────────
-    // If the client is on a different network than the scanner agent,
-    // there will be NO matching devices. Show a clear warning instead
-    // of silently showing all devices from the scanner's network.
-    if (filterToUse !== 'all' && agentSubnetPrefixes.length > 0) {
-      const clientOnAgentNetwork = agentSubnetPrefixes.includes(filterToUse);
-      if (!clientOnAgentNetwork) {
-        // Client is on a different network — show warning and stop
-        if (heatmapLayer) heatmapLayer.setLatLngs([]);
-        updateWifiDevicesUI([], 'different-network',
-          `Your device is on a different network (${filterToUse}x) than the scanner (${agentSubnetPrefixes.join(', ')}x). Connect to the same network as the scanner to see local devices.`);
-        return;
+    if (detectedPrefix && detectedPrefix !== 'all') {
+      // Find the agent that is scanning this prefix
+      const matchingAgent = activeAgents.find(a => (a.networks || []).some(n => n.subnetPrefix === detectedPrefix));
+      if (matchingAgent) {
+        const newValue = `${matchingAgent.agentIp}|${detectedPrefix}`;
+        if (wifiNetworkFilter && wifiNetworkFilter.value !== newValue) {
+          wifiNetworkFilter.value = newValue;
+          activeSubnetFilter = newValue;
+          localStorage.setItem('mazemap_wifi_subnet_filter', newValue);
+        }
+        targetAgentIp = matchingAgent.agentIp;
+        targetSubnetPrefix = detectedPrefix;
       }
+    }
+  }
+
+  // ── Filter Incoming Message ──────────────────────────────────────────
+  if (targetSubnetPrefix !== 'all') {
+    // 1. If we target a specific agent, ignore messages from other agents
+    if (targetAgentIp !== 'any' && message.agentIp !== targetAgentIp) {
+      return; // Ignore data from other scanner PCs
+    }
+
+    // 2. If the message doesn't contain the subnet we want, ignore it
+    const hasSubnet = agentSubnetPrefixes.includes(targetSubnetPrefix);
+    if (!hasSubnet) {
+      return; // Ignore messages that don't contain our target subnet
     }
   }
 
@@ -1818,13 +1839,13 @@ function processWifiScannerMessage(message) {
   let filteredDevices = message.devices || [];
   let filteredPoints = message.points || [];
   
-  if (filterToUse !== 'all') {
-    filteredDevices = filteredDevices.filter(d => d.subnetPrefix === filterToUse);
+  if (targetSubnetPrefix !== 'all') {
+    filteredDevices = filteredDevices.filter(d => d.subnetPrefix === targetSubnetPrefix);
     
     // Match points 1-to-1 with devices
     const tempPoints = [];
     (message.devices || []).forEach((d, idx) => {
-      if (d.subnetPrefix === filterToUse) {
+      if (d.subnetPrefix === targetSubnetPrefix) {
         tempPoints.push(message.points[idx]);
       }
     });
@@ -1907,18 +1928,23 @@ function updateSubnetFilterDropdown() {
   // Add options from Active Agents (the primary source)
   activeAgents.forEach(agent => {
     (agent.networks || []).forEach(net => {
-      if (!addedSubnets.has(net.subnetPrefix)) {
+      const uniqueValue = `${agent.agentIp}|${net.subnetPrefix}`;
+      if (!addedSubnets.has(uniqueValue)) {
         const option = document.createElement('option');
-        option.value = net.subnetPrefix;
+        option.value = uniqueValue;
+        
         let displayName = net.interfaceName;
         if (displayName && !displayName.includes(net.subnetPrefix)) {
           displayName = `${displayName} (${net.subnetPrefix}x)`;
         } else if (!displayName) {
           displayName = `${net.subnetPrefix}x`;
         }
-        option.textContent = displayName;
+        
+        // Append Agent IP to help user identify which PC is scanning
+        option.textContent = `${displayName} [via ${agent.agentIp}]`;
+        
         wifiNetworkFilter.appendChild(option);
-        addedSubnets.add(net.subnetPrefix);
+        addedSubnets.add(uniqueValue);
       }
     });
   });
