@@ -1693,11 +1693,18 @@ function connectToWifiWS() {
             showToast(`Connected via local network: ${message.interfaceName || message.subnetPrefix + 'x'}`);
             // If respective filter is checked, apply it immediately
             if (wifiFilterRespective && wifiFilterRespective.checked) {
-              activeSubnetFilter = message.subnetPrefix;
-              if (wifiNetworkFilter) {
-                wifiNetworkFilter.value = message.subnetPrefix;
+              const matchingValue = findNetworkOptionValueBySubnet(message.subnetPrefix);
+              if (matchingValue) {
+                activeSubnetFilter = matchingValue;
+                if (wifiNetworkFilter) {
+                  wifiNetworkFilter.value = matchingValue;
+                }
+                localStorage.setItem('mazemap_wifi_subnet_filter', matchingValue);
+              } else {
+                if (heatmapLayer) heatmapLayer.setLatLngs([]);
+                updateWifiDevicesUI([], 'different-network',
+                  `Your phone is on ${message.subnetPrefix}x, but no scanner agent is publishing that WiFi yet. Open the scanner on a PC inside this network.`);
               }
-              localStorage.setItem('mazemap_wifi_subnet_filter', message.subnetPrefix);
               if (lastWifiScannerMessage) {
                 processWifiScannerMessage(lastWifiScannerMessage);
               }
@@ -1769,6 +1776,36 @@ function detectRespectiveSubnet(subnetsList) {
   return subnetsList[0];
 }
 
+function getActiveNetworkEntries() {
+  const entries = [];
+
+  activeAgents.forEach(agent => {
+    (agent.networks || []).forEach(net => {
+      const uniqueValue = `${agent.agentIp}|${net.subnetPrefix}`;
+      let displayName = net.interfaceName;
+
+      if (displayName && !displayName.includes(net.subnetPrefix)) {
+        displayName = `${displayName} (${net.subnetPrefix}x)`;
+      } else if (!displayName) {
+        displayName = `${net.subnetPrefix}x`;
+      }
+
+      entries.push({
+        value: uniqueValue,
+        subnetPrefix: net.subnetPrefix,
+        label: `${displayName} [via ${agent.agentIp}]`
+      });
+    });
+  });
+
+  return entries;
+}
+
+function findNetworkOptionValueBySubnet(subnetPrefix) {
+  const match = getActiveNetworkEntries().find(entry => entry.subnetPrefix === subnetPrefix);
+  return match ? match.value : '';
+}
+
 function processWifiScannerMessage(message) {
   if (message.type !== 'wifi-heatmap') return;
   
@@ -1817,6 +1854,11 @@ function processWifiScannerMessage(message) {
         }
         targetAgentIp = matchingAgent.agentIp;
         targetSubnetPrefix = detectedPrefix;
+      } else {
+        if (heatmapLayer) heatmapLayer.setLatLngs([]);
+        updateWifiDevicesUI([], 'different-network',
+          `Your phone is on ${detectedPrefix}x, but no scanner agent is publishing that WiFi yet. A mobile browser cannot scan the LAN by itself.`);
+        return;
       }
     }
   }
@@ -1921,32 +1963,12 @@ function updateSubnetFilterDropdown() {
   
   // Clear all options except "all"
   wifiNetworkFilter.innerHTML = '<option value="all">All Networks</option>';
-  
-  // Track unique subnets we've added
-  const addedSubnets = new Set();
 
-  // Add options from Active Agents (the primary source)
-  activeAgents.forEach(agent => {
-    (agent.networks || []).forEach(net => {
-      const uniqueValue = `${agent.agentIp}|${net.subnetPrefix}`;
-      if (!addedSubnets.has(uniqueValue)) {
-        const option = document.createElement('option');
-        option.value = uniqueValue;
-        
-        let displayName = net.interfaceName;
-        if (displayName && !displayName.includes(net.subnetPrefix)) {
-          displayName = `${displayName} (${net.subnetPrefix}x)`;
-        } else if (!displayName) {
-          displayName = `${net.subnetPrefix}x`;
-        }
-        
-        // Append Agent IP to help user identify which PC is scanning
-        option.textContent = `${displayName} [via ${agent.agentIp}]`;
-        
-        wifiNetworkFilter.appendChild(option);
-        addedSubnets.add(uniqueValue);
-      }
-    });
+  getActiveNetworkEntries().forEach(entry => {
+    const option = document.createElement('option');
+    option.value = entry.value;
+    option.textContent = entry.label;
+    wifiNetworkFilter.appendChild(option);
   });
   
   // Restore value if it still exists in the new list, otherwise fallback to 'all'
@@ -1973,6 +1995,7 @@ function disconnectWifiWS() {
   updateWifiWsStatus('disconnected');
   
   lastWifiScannerMessage = null;
+  activeAgents = [];
   activeSubnetFilter = 'all';
   detectedClientSubnetPrefix = null;
   if (wifiNetworkFilter) {
@@ -1992,7 +2015,7 @@ function updateWifiDevicesUI(devices, type, customMessage) {
   wifiDevicesList.innerHTML = '';
   
   if (wifiDeviceCount) {
-    const netCount = activeAgents.length;
+    const netCount = getActiveNetworkEntries().length;
     wifiDeviceCount.textContent = `${devices.length} Devices • ${netCount} Active Network${netCount !== 1 ? 's' : ''}`;
   }
   

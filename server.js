@@ -166,6 +166,9 @@ wss.on('connection', (ws, req) => {
     }
   }
 
+  // Always send the currently active scanner list to newly connected clients.
+  sendAgentList(ws);
+
 
   ws.on('message', (messageText) => {
     try {
@@ -426,21 +429,25 @@ function performScanAndTriangulate() {
 }
 
 function broadcastAgentList() {
+  for (const client of clients) {
+    if (client.readyState === 1) {
+      sendAgentList(client);
+    }
+  }
+}
+
+function sendAgentList(ws) {
+  if (!ws || ws.readyState !== 1) return;
+
   const agents = Array.from(activeAgents.values()).map(a => ({
     agentIp: a.agentIp,
     networks: a.agentNetworks
   }));
-  
-  const payload = JSON.stringify({
+
+  ws.send(JSON.stringify({
     type: 'agent-list',
     agents
-  });
-  
-  for (const client of clients) {
-    if (client.readyState === 1) {
-      client.send(payload);
-    }
-  }
+  }));
 }
 
 function broadcastPayload(devices, points, mode, agentIp, agentNetworksOverride) {
