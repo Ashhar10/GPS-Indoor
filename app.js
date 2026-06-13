@@ -96,6 +96,7 @@ const btnClearPath = document.getElementById('btn-clear-path');
 const checkboxWifiScanner = document.getElementById('toggle-wifi-scanner');
 const wifiScanHud = document.getElementById('wifi-scan-hud');
 const wifiConnectionStatus = document.getElementById('wifi-connection-status');
+const wifiScannerIpInput = document.getElementById('wifi-scanner-ip');
 const wifiDeviceCount = document.getElementById('wifi-device-count');
 const wifiDevicesList = document.getElementById('wifi-devices-list');
 
@@ -465,6 +466,30 @@ function setupUIEventListeners() {
           map.removeLayer(heatmapLayer);
           heatmapLayer = null;
         }
+      }
+    });
+  }
+
+  // WiFi Scanner IP Configuration Input
+  if (wifiScannerIpInput) {
+    const savedIp = localStorage.getItem('mazemap_wifi_scanner_ip');
+    if (savedIp) {
+      wifiScannerIpInput.value = savedIp;
+    } else {
+      const hostname = window.location.hostname;
+      if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname.startsWith('192.168.') || hostname.startsWith('10.') || hostname.startsWith('172.')) {
+        wifiScannerIpInput.value = hostname + ':8080';
+      } else {
+        wifiScannerIpInput.value = '127.0.0.1:8080';
+      }
+    }
+
+    wifiScannerIpInput.addEventListener('change', () => {
+      const value = wifiScannerIpInput.value.trim();
+      localStorage.setItem('mazemap_wifi_scanner_ip', value);
+      showToast('Scanner address updated. Reconnecting...');
+      if (isWifiScannerEnabled) {
+        connectToWifiWS();
       }
     });
   }
@@ -1532,9 +1557,13 @@ function connectToWifiWS() {
   updateWifiWsStatus('connecting');
   
   try {
-    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsHost = window.location.hostname;
-    const wsUrl = `${wsProtocol}//${wsHost}:8080`;
+    let serverAddr = wifiScannerIpInput ? wifiScannerIpInput.value.trim() : '127.0.0.1:8080';
+    if (!serverAddr) serverAddr = '127.0.0.1:8080';
+    
+    let wsUrl = serverAddr;
+    if (!wsUrl.startsWith('ws://') && !wsUrl.startsWith('wss://')) {
+      wsUrl = 'ws://' + wsUrl;
+    }
     
     wifiWebSocket = new WebSocket(wsUrl);
     
