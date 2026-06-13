@@ -477,10 +477,12 @@ function setupUIEventListeners() {
       wifiScannerIpInput.value = savedIp;
     } else {
       const hostname = window.location.hostname;
-      if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname.startsWith('192.168.') || hostname.startsWith('10.') || hostname.startsWith('172.')) {
+      const isLocal = hostname === 'localhost' || hostname === '127.0.0.1' || hostname.startsWith('192.168.') || hostname.startsWith('10.') || hostname.startsWith('172.');
+      if (isLocal) {
         wifiScannerIpInput.value = hostname + ':8080';
       } else {
-        wifiScannerIpInput.value = '127.0.0.1:8080';
+        // Default to the current hostname/port if loaded from a public domain (like Render or Vercel)
+        wifiScannerIpInput.value = window.location.host;
       }
     }
 
@@ -1557,14 +1559,21 @@ function connectToWifiWS() {
   updateWifiWsStatus('connecting');
   
   try {
-    let serverAddr = wifiScannerIpInput ? wifiScannerIpInput.value.trim() : '127.0.0.1:8080';
-    if (!serverAddr) serverAddr = '127.0.0.1:8080';
-    
-    let wsUrl = serverAddr;
-    if (!wsUrl.startsWith('ws://') && !wsUrl.startsWith('wss://')) {
-      wsUrl = 'ws://' + wsUrl;
+    let serverAddr = wifiScannerIpInput ? wifiScannerIpInput.value.trim() : '';
+    if (!serverAddr) {
+      serverAddr = window.location.host || '127.0.0.1:8080';
     }
     
+    let wsUrl = serverAddr;
+    const isHttps = window.location.protocol === 'https:';
+    
+    if (!wsUrl.startsWith('ws://') && !wsUrl.startsWith('wss://')) {
+      wsUrl = (isHttps ? 'wss://' : 'ws://') + wsUrl;
+    } else if (isHttps && wsUrl.startsWith('ws://')) {
+      wsUrl = wsUrl.replace('ws://', 'wss://');
+    }
+    
+    console.log('[WS] Connecting to:', wsUrl);
     wifiWebSocket = new WebSocket(wsUrl);
     
     wifiWebSocket.onopen = () => {
