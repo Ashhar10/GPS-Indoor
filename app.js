@@ -38,6 +38,7 @@ let wifiHeatmapPoints = [];
 let lastWifiScannerMessage = null;
 let activeSubnetFilter = 'all';
 let detectedClientSubnetPrefix = null;
+let activeAgents = []; // Track active scanning agents reported by server
 
 
 
@@ -1675,6 +1676,12 @@ function connectToWifiWS() {
       if (!isWifiScannerEnabled) return;
       try {
         const message = JSON.parse(event.data);
+        if (message.type === 'agent-list') {
+          activeAgents = message.agents || [];
+          console.log('[WS] Received agent list:', activeAgents);
+          updateSubnetFilterDropdown();
+          return;
+        }
         if (message.type === 'client-info') {
           console.log('[WS] Received client info:', message);
           if (message.subnetPrefix && isPrivateIp(message.ip)) {
@@ -1768,21 +1775,7 @@ function processWifiScannerMessage(message) {
   const agentSubnetPrefixes = agentNetworks.map(n => n.subnetPrefix);
 
   // Extract and update unique subnets from scan data
-  const subnets = {};
-  if (message.devices) {
-    message.devices.forEach(d => {
-      if (d.subnetPrefix) {
-        let displayName = d.interfaceName;
-        if (displayName && !displayName.includes(d.subnetPrefix)) {
-          displayName = `${displayName} (${d.subnetPrefix}x)`;
-        } else if (!displayName) {
-          displayName = `${d.subnetPrefix}x`;
-        }
-        subnets[d.subnetPrefix] = displayName;
-      }
-    });
-  }
-  updateSubnetFilterDropdown(subnets);
+  updateSubnetFilterDropdown();
 
   // ── Respective Network Filter Logic ──────────────────────────────────
   let filterToUse = activeSubnetFilter;
@@ -1792,8 +1785,10 @@ function processWifiScannerMessage(message) {
     if (detectedClientSubnetPrefix) {
       filterToUse = detectedClientSubnetPrefix;
     } else {
-      // Priority 2: Guess from the scanned subnets list
-      filterToUse = detectRespectiveSubnet(Object.keys(subnets));
+      // Priority 2: Guess from the scanned subnets list of all active agents
+      const allAvailableSubnets = [];
+      activeAgents.forEach(a => (a.networks || []).forEach(n => allAvailableSubnets.push(n.subnetPrefix)));
+      filterToUse = detectRespectiveSubnet(allAvailableSubnets);
     }
 
     // Sync dropdown to this filter
@@ -1897,7 +1892,7 @@ function processWifiScannerMessage(message) {
   updateWifiDevicesUI(renderedDevices);
 }
 
-function updateSubnetFilterDropdown(subnets) {
+function updateSubnetFilterDropdown() {
   if (!wifiNetworkFilter) return;
   
   // Get currently selected value
@@ -1906,21 +1901,41 @@ function updateSubnetFilterDropdown(subnets) {
   // Clear all options except "all"
   wifiNetworkFilter.innerHTML = '<option value="all">All Networks</option>';
   
-  // Add new options
-  Object.keys(subnets).forEach(prefix => {
-    const option = document.createElement('option');
-    option.value = prefix;
-    option.textContent = subnets[prefix];
-    wifiNetworkFilter.appendChild(option);
+  // Track unique subnets we've added
+  const addedSubnets = new Set();
+
+  // Add options from Active Agents (the primary source)
+  activeAgents.forEach(agent => {
+    (agent.networks || []).forEach(net => {
+      if (!addedSubnets.has(net.subnetPrefix)) {
+        const option = document.createElement('option');
+        option.value = net.subnetPrefix;
+        let displayName = net.interfaceName;
+        if (displayName && !displayName.includes(net.subnetPrefix)) {
+          displayName = `${displayName} (${net.subnetPrefix}x)`;
+        } else if (!displayName) {
+          displayName = `${net.subnetPrefix}x`;
+        }
+        option.textContent = displayName;
+        wifiNetworkFilter.appendChild(option);
+        addedSubnets.add(net.subnetPrefix);
+      }
+    });
   });
   
   // Restore value if it still exists in the new list, otherwise fallback to 'all'
-  if (subnets[currentValue] || currentValue === 'all') {
+  const options = Array.from(wifiNetworkFilter.options).map(o => o.value);
+  if (options.includes(currentValue)) {
     wifiNetworkFilter.value = currentValue;
     activeSubnetFilter = currentValue;
   } else {
     wifiNetworkFilter.value = 'all';
     activeSubnetFilter = 'all';
+  }
+
+  // Update device count or status label if needed
+  if (wifiDeviceCount && activeAgents.length > 0) {
+    // We can show "X Networks Active" when scanning
   }
 }
 
@@ -1951,7 +1966,8 @@ function updateWifiDevicesUI(devices, type, customMessage) {
   wifiDevicesList.innerHTML = '';
   
   if (wifiDeviceCount) {
-    wifiDeviceCount.textContent = `${devices.length} Devices`;
+    const netCount = activeAgents.length;
+    wifiDeviceCount.textContent = `${devices.length} Devices • ${netCount} Active Network${netCount !== 1 ? 's' : ''}`;
   }
   
   if (devices.length === 0) {

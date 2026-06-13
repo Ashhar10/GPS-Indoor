@@ -21,7 +21,7 @@ const IS_CLOUD = !!(process.env.RENDER || process.env.RAILWAY || process.env.FLY
 const REMOTE_WS_URL = process.env.REMOTE_WS_URL || 'wss://gps-indoor.onrender.com';
 
 const clients = new Set();
-let lastAgentScan = null;
+const activeAgents = new Map(); // Store multiple agents by IP
 let remoteWs = null;
 
 // ─── MIME Types ────────────────────────────────────────────────────────
@@ -79,12 +79,12 @@ const server = http.createServer((req, res) => {
 
   // Health check endpoint for Render
   if (req.url === '/health') {
-    const isAgentConnected = !!(lastAgentScan && (Date.now() - lastAgentScan.timestamp < 15000));
+    const activeAgentCount = Array.from(activeAgents.values()).filter(a => Date.now() - a.timestamp < 15000).length;
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ 
       status: 'ok', 
       mode: IS_CLOUD ? 'cloud-server' : 'local-scanner', 
-      agentActive: isAgentConnected,
+      activeAgents: activeAgentCount,
       clients: clients.size 
     }));
     return;
@@ -171,16 +171,21 @@ wss.on('connection', (ws, req) => {
     try {
       const data = JSON.parse(messageText);
       if (data.type === 'publish-scan') {
-        lastAgentScan = {
+        const agentId = ws.remoteIpAddress || 'unknown';
+        activeAgents.set(agentId, {
           devices: data.devices,
           points: data.points,
           timestamp: Date.now(),
-          agentIp: ws.remoteIpAddress
-        };
-        console.log(`[WS-Agent] Published local network scan: ${data.devices.length} devices.`);
+          agentIp: agentId,
+          agentNetworks: data.agentNetworks
+        });
+        console.log(`[WS-Agent] Published scan from ${agentId}: ${data.devices.length} devices.`);
         
         // Broadcast the real scanner data immediately to all web clients
-        broadcastPayload(data.devices, data.points, 'live', ws.remoteIpAddress);
+        broadcastPayload(data.devices, data.points, 'live', agentId, data.agentNetworks);
+        
+        // Also broadcast updated agent list to all clients so dropdowns can sync
+        broadcastAgentList();
       }
     } catch (err) {
       console.error('[WS] Error processing message:', err.message);
@@ -190,6 +195,12 @@ wss.on('connection', (ws, req) => {
   ws.on('close', () => {
     clients.delete(ws);
     console.log(`[WS] Client disconnected. Total: ${clients.size}`);
+    
+    // If this was an agent, remove it and notify others
+    if (ws.remoteIpAddress && activeAgents.has(ws.remoteIpAddress)) {
+      activeAgents.delete(ws.remoteIpAddress);
+      broadcastAgentList();
+    }
   });
 
   ws.on('error', (err) => {
@@ -347,10 +358,20 @@ function getAgentNetworks() {
 // ─── Scan & Triangulate ───────────────────────────────────────────────
 function performScanAndTriangulate() {
   // If running on cloud, we rely on the local agent publishing data.
-  // We only run simulated demo scans if no agent is active.
+  // We only run simulated demo scans if no agents are active.
   if (IS_CLOUD) {
-    const isAgentActive = lastAgentScan && (Date.now() - lastAgentScan.timestamp < 15000);
-    if (!isAgentActive && clients.size > 0) {
+    // Cleanup stale agents (older than 15 seconds)
+    const now = Date.now();
+    let changed = false;
+    for (const [id, agent] of activeAgents.entries()) {
+      if (now - agent.timestamp > 15000) {
+        activeAgents.delete(id);
+        changed = true;
+      }
+    }
+    if (changed) broadcastAgentList();
+
+    if (activeAgents.size === 0 && clients.size > 0) {
       // Simulated demo fallback
       const activeCount = 6 + Math.floor(Math.random() * 7); // 6–12 devices
       const activeDevices = DEMO_DEVICES.slice(0, activeCount);
@@ -397,14 +418,33 @@ function performScanAndTriangulate() {
       remoteWs.send(JSON.stringify({
         type: 'publish-scan',
         devices,
-        points
+        points,
+        agentNetworks: getAgentNetworks()
       }));
     }
   });
 }
 
-function broadcastPayload(devices, points, mode, agentIp) {
-  const agentNetworks = getAgentNetworks();
+function broadcastAgentList() {
+  const agents = Array.from(activeAgents.values()).map(a => ({
+    agentIp: a.agentIp,
+    networks: a.agentNetworks
+  }));
+  
+  const payload = JSON.stringify({
+    type: 'agent-list',
+    agents
+  });
+  
+  for (const client of clients) {
+    if (client.readyState === 1) {
+      client.send(payload);
+    }
+  }
+}
+
+function broadcastPayload(devices, points, mode, agentIp, agentNetworksOverride) {
+  const agentNetworks = agentNetworksOverride || getAgentNetworks();
   const payload = JSON.stringify({
     type: 'wifi-heatmap',
     mode: mode,
