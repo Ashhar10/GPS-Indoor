@@ -1584,6 +1584,13 @@ function connectToWifiWS() {
     let wsUrl = serverAddr;
     const isHttps = window.location.protocol === 'https:';
     
+    // Normalize http:// and https:// prefixes to WebSocket protocols
+    if (wsUrl.startsWith('https://')) {
+      wsUrl = wsUrl.replace('https://', 'wss://');
+    } else if (wsUrl.startsWith('http://')) {
+      wsUrl = wsUrl.replace('http://', 'ws://');
+    }
+    
     if (!wsUrl.startsWith('ws://') && !wsUrl.startsWith('wss://')) {
       wsUrl = (isHttps ? 'wss://' : 'ws://') + wsUrl;
     } else if (isHttps && wsUrl.startsWith('ws://')) {
