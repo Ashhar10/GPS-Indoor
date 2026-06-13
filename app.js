@@ -1641,20 +1641,23 @@ function runAStar(startLatLng, endLatLng, boundary, floor) {
 // --- Leaflet Heatmap Layer Initialization ---
 let heatmapLayer = null;
 function initHeatmap() {
-  if (!heatmapLayer) {
-    heatmapLayer = L.heatLayer([], {
-      radius: 35,
-      blur: 20,
-      max: 5,
-      gradient: {
-        0.1: '#3b82f6', // Cool Blue (Low traffic)
-        0.3: '#06b6d4', // Cyan
-        0.5: '#10b981', // Green (Normal traffic)
-        0.7: '#f59e0b', // Orange (Medium density)
-        1.0: '#ef4444'  // Red (High density)
-      }
-    }).addTo(map);
+  if (heatmapLayer) return;
+  if (typeof L === 'undefined' || typeof L.heatLayer !== 'function') {
+    console.warn('[Heatmap] Leaflet.heat plugin is not loaded; WiFi heatmap disabled.');
+    return;
   }
+  heatmapLayer = L.heatLayer([], {
+    radius: 35,
+    blur: 20,
+    max: 5,
+    gradient: {
+      0.1: '#3b82f6', // Cool Blue (Low traffic)
+      0.3: '#06b6d4', // Cyan
+      0.5: '#10b981', // Green (Normal traffic)
+      0.7: '#f59e0b', // Orange (Medium density)
+      1.0: '#ef4444'  // Red (High density)
+    }
+  }).addTo(map);
 }
 
 // --- WIFI SUBNET SCANNER CLIENT & REAL-TIME HEATMAP ---
