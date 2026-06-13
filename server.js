@@ -3,10 +3,9 @@
  * 
  * Single-port server that:
  *   1. Serves all static files (HTML, CSS, JS)
- *   2. Handles WebSocket upgrades for real-time device scanning
- *   3. Detects local vs cloud environment for ARP scanning or demo mode
- * 
- * Deploy to Render, Railway, Fly.io, or run locally — works everywhere.
+ *   2. Handles WebSocket upgrades for real-time device scanning (via 'ws')
+ *   3. Collects local scans on PC and streams them to the Render backend
+ *   4. Broadcasts real-time accurate local device coordinates on the cloud
  */
 
 const http = require('http');
@@ -15,11 +14,15 @@ const { exec } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const { WebSocketServer } = require('ws');
 
 const PORT = process.env.PORT || 8080;
 const IS_CLOUD = !!(process.env.RENDER || process.env.RAILWAY || process.env.FLY_APP_NAME || process.env.DYNO);
+const REMOTE_WS_URL = process.env.REMOTE_WS_URL || 'wss://gps-indoor.onrender.com';
 
 const clients = new Set();
+let lastAgentScan = null;
+let remoteWs = null;
 
 // ─── MIME Types ────────────────────────────────────────────────────────
 const MIME_TYPES = {
@@ -46,7 +49,7 @@ const APs = [
   { id: 'ap-3', name: 'SW AP',        lat: 37.4216, lng: -122.0845 }
 ];
 
-// ─── Demo Devices (used on cloud where ARP is unavailable) ────────────
+// ─── Demo Devices (used on cloud as fallback if no local agent is running) ────────────
 const DEMO_DEVICES = [
   { ip: '192.168.1.101', mac: '2c-f0-5d-a1-b2-c3' },
   { ip: '192.168.1.102', mac: '3e-d1-6a-b4-c5-d6' },
@@ -64,7 +67,6 @@ const DEMO_DEVICES = [
 
 // ─── HTTP Server (Static Files) ───────────────────────────────────────
 const server = http.createServer((req, res) => {
-  // CORS headers
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -77,18 +79,22 @@ const server = http.createServer((req, res) => {
 
   // Health check endpoint for Render
   if (req.url === '/health') {
+    const isAgentConnected = !!(lastAgentScan && (Date.now() - lastAgentScan.timestamp < 15000));
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ status: 'ok', mode: IS_CLOUD ? 'cloud-demo' : 'local-arp', clients: clients.size }));
+    res.end(JSON.stringify({ 
+      status: 'ok', 
+      mode: IS_CLOUD ? 'cloud-server' : 'local-scanner', 
+      agentActive: isAgentConnected,
+      clients: clients.size 
+    }));
     return;
   }
 
-  // Resolve file path
   let urlPath = req.url.split('?')[0];
   if (urlPath === '/') urlPath = '/index.html';
 
   const filePath = path.join(__dirname, urlPath);
 
-  // Security: prevent directory traversal
   if (!filePath.startsWith(__dirname)) {
     res.writeHead(403, { 'Content-Type': 'text/plain' });
     res.end('Forbidden');
@@ -114,38 +120,50 @@ const server = http.createServer((req, res) => {
   });
 });
 
-// ─── WebSocket Upgrade Handler ────────────────────────────────────────
-server.on('upgrade', (req, socket) => {
+// ─── WebSocket Server (using 'ws' package) ───────────────────────────
+const wss = new WebSocketServer({ noServer: true });
+
+server.on('upgrade', (req, socket, head) => {
   if (req.headers['upgrade'] !== 'websocket') {
     socket.destroy();
     return;
   }
 
-  const key = req.headers['sec-websocket-key'];
-  const acceptKey = crypto
-    .createHash('sha1')
-    .update(key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11', 'binary')
-    .digest('base64');
+  wss.handleUpgrade(req, socket, head, (ws) => {
+    wss.emit('connection', ws, req);
+  });
+});
 
-  const headers = [
-    'HTTP/1.1 101 Switching Protocols',
-    'Upgrade: websocket',
-    'Connection: Upgrade',
-    `Sec-WebSocket-Accept: ${acceptKey}`,
-    '\r\n'
-  ];
-
-  socket.write(headers.join('\r\n'));
-  clients.add(socket);
+wss.on('connection', (ws, req) => {
+  clients.add(ws);
   console.log(`[WS] Client connected. Total: ${clients.size}`);
 
-  socket.on('close', () => {
-    clients.delete(socket);
+  ws.on('message', (messageText) => {
+    try {
+      const data = JSON.parse(messageText);
+      if (data.type === 'publish-scan') {
+        lastAgentScan = {
+          devices: data.devices,
+          points: data.points,
+          timestamp: Date.now()
+        };
+        console.log(`[WS-Agent] Published local network scan: ${data.devices.length} devices.`);
+        
+        // Broadcast the real scanner data immediately to all web clients
+        broadcastPayload(data.devices, data.points, 'live');
+      }
+    } catch (err) {
+      console.error('[WS] Error processing message:', err.message);
+    }
+  });
+
+  ws.on('close', () => {
+    clients.delete(ws);
     console.log(`[WS] Client disconnected. Total: ${clients.size}`);
   });
 
-  socket.on('error', (err) => {
-    clients.delete(socket);
+  ws.on('error', (err) => {
+    clients.delete(ws);
     console.log('[WS] Socket error:', err.message);
   });
 });
@@ -200,7 +218,6 @@ function parseArpOutput(stdout) {
   const isWindows = os.platform() === 'win32';
 
   if (isWindows) {
-    // Windows:  192.168.1.1    aa-bb-cc-dd-ee-ff    dynamic
     const regex = /^\s*([0-9.]+)\s+([0-9a-fA-F-]+)\s+dynamic/gm;
     let match;
     while ((match = regex.exec(stdout)) !== null) {
@@ -210,125 +227,131 @@ function parseArpOutput(stdout) {
       }
     }
   } else {
-    // Linux/Mac:  ? (192.168.1.1) at aa:bb:cc:dd:ee:ff [ether] on eth0
     const regex = /\(([0-9.]+)\)\s+at\s+([0-9a-fA-F:]+)/gm;
     let match;
     while ((match = regex.exec(stdout)) !== null) {
       const ip = match[1];
-      const mac = match[2].replace(/:/g, '-'); // normalize to Windows-style dashes
+      const mac = match[2].replace(/:/g, '-');
       if (!ip.startsWith('224.') && !ip.startsWith('239.') && ip !== '255.255.255.255' && mac !== 'ff-ff-ff-ff-ff-ff') {
         results.push({ ip, mac });
       }
     }
   }
-
   return results;
 }
 
 // ─── Scan & Triangulate ───────────────────────────────────────────────
 function performScanAndTriangulate() {
-  if (clients.size === 0) return;
-
+  // If running on cloud, we rely on the local agent publishing data.
+  // We only run simulated demo scans if no agent is active.
   if (IS_CLOUD) {
-    // Cloud mode: use demo devices with slight randomization
-    const activeCount = 6 + Math.floor(Math.random() * 7); // 6–12 devices
-    const activeDevices = DEMO_DEVICES.slice(0, activeCount);
-
-    const devices = [];
-    const points = [];
-
-    activeDevices.forEach(d => {
-      const result = triangulateSingleDevice(d.ip, d.mac);
-      devices.push(result.device);
-      points.push(result.point);
-    });
-
-    broadcastPayload(devices, points);
-  } else {
-    // Local mode: real ARP scan
-    exec('arp -a', (error, stdout) => {
-      if (error) {
-        console.error('[Scan Error] ARP failed, falling back to demo:', error.message);
-        // Fallback to demo devices
-        const devices = [];
-        const points = [];
-        DEMO_DEVICES.slice(0, 8).forEach(d => {
-          const result = triangulateSingleDevice(d.ip, d.mac);
-          devices.push(result.device);
-          points.push(result.point);
-        });
-        broadcastPayload(devices, points);
-        return;
-      }
-
-      const parsed = parseArpOutput(stdout);
+    const isAgentActive = lastAgentScan && (Date.now() - lastAgentScan.timestamp < 15000);
+    if (!isAgentActive && clients.size > 0) {
+      // Simulated demo fallback
+      const activeCount = 6 + Math.floor(Math.random() * 7); // 6–12 devices
+      const activeDevices = DEMO_DEVICES.slice(0, activeCount);
       const devices = [];
       const points = [];
 
-      parsed.forEach(d => {
+      activeDevices.forEach(d => {
         const result = triangulateSingleDevice(d.ip, d.mac);
         devices.push(result.device);
         points.push(result.point);
       });
 
-      broadcastPayload(devices, points);
-    });
+      broadcastPayload(devices, points, 'demo');
+    }
+    return;
   }
+
+  // Local mode: execute actual ARP scan
+  if (clients.size === 0 && !remoteWs) return; // Save resources if no local clients and no remote server connected
+
+  exec('arp -a', (error, stdout) => {
+    let parsed = [];
+    if (error) {
+      console.error('[Scan Error] ARP failed, falling back to simulated local devices:', error.message);
+      DEMO_DEVICES.slice(0, 4).forEach(d => parsed.push(d));
+    } else {
+      parsed = parseArpOutput(stdout);
+    }
+
+    const devices = [];
+    const points = [];
+
+    parsed.forEach(d => {
+      const result = triangulateSingleDevice(d.ip, d.mac);
+      devices.push(result.device);
+      points.push(result.point);
+    });
+
+    // Broadcast locally to local WebSocket clients (e.g. localhost page)
+    broadcastPayload(devices, points, 'live');
+
+    // Publish/Forward scans to remote Render WebSocket server
+    if (remoteWs && remoteWs.readyState === 1) { // OPEN
+      remoteWs.send(JSON.stringify({
+        type: 'publish-scan',
+        devices,
+        points
+      }));
+    }
+  });
 }
 
-function broadcastPayload(devices, points) {
+function broadcastPayload(devices, points, mode) {
   const payload = JSON.stringify({
     type: 'wifi-heatmap',
-    mode: IS_CLOUD ? 'demo' : 'live',
+    mode: mode,
     devices,
     points
   });
-  broadcast(payload);
-}
-
-// ─── WebSocket Frame Builder & Broadcaster ────────────────────────────
-function broadcast(messageText) {
-  const frame = buildFrame(messageText);
+  
   for (const client of clients) {
-    if (!client.destroyed) {
-      client.write(frame);
+    if (client.readyState === 1) { // WebSocket.OPEN
+      client.send(payload);
     }
   }
 }
 
-function buildFrame(messageText) {
-  const dataBuffer = Buffer.from(messageText, 'utf8');
-  const length = dataBuffer.length;
-  let header;
-
-  if (length <= 125) {
-    header = Buffer.alloc(2);
-    header[0] = 0x81;
-    header[1] = length;
-  } else if (length <= 65535) {
-    header = Buffer.alloc(4);
-    header[0] = 0x81;
-    header[1] = 126;
-    header.writeUInt16BE(length, 2);
-  } else {
-    header = Buffer.alloc(10);
-    header[0] = 0x81;
-    header[1] = 127;
-    header.writeUInt32BE(0, 2);
-    header.writeUInt32BE(length, 6);
-  }
-
-  return Buffer.concat([header, dataBuffer]);
+// ─── Local Agent Mode Client Setup ────────────────────────────────────
+function connectToRemoteServer() {
+  const WebSocket = require('ws');
+  console.log(`[Agent] Connecting to Remote Server: ${REMOTE_WS_URL}`);
+  
+  remoteWs = new WebSocket(REMOTE_WS_URL);
+  
+  remoteWs.on('open', () => {
+    console.log(`[Agent] Successfully connected to Render backend. Streaming local network scans...`);
+  });
+  
+  remoteWs.on('close', () => {
+    console.log(`[Agent] Disconnected from Render backend. Retrying in 5 seconds...`);
+    remoteWs = null;
+    setTimeout(connectToRemoteServer, 5000);
+  });
+  
+  remoteWs.on('error', (err) => {
+    console.error(`[Agent] Connection error:`, err.message);
+  });
 }
 
 // ─── Start ────────────────────────────────────────────────────────────
 setInterval(performScanAndTriangulate, 3000);
 
+if (!IS_CLOUD) {
+  // If running locally, act as a scanner agent and connect to your cloud Render instance
+  connectToRemoteServer();
+}
+
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`─────────────────────────────────────────────────`);
   console.log(`  GPS Indoor Mapper — Server Running`);
-  console.log(`  Mode:      ${IS_CLOUD ? '☁️  Cloud (Demo Devices)' : '🖥️  Local (ARP Scan)'}`);
+  console.log(`  Mode:      ${IS_CLOUD ? '☁️  Cloud (Forwarder/Demo)' : '🖥️  Local (ARP Scanner Agent)'}`);
   console.log(`  HTTP:      http://0.0.0.0:${PORT}`);
   console.log(`  WebSocket: ws://0.0.0.0:${PORT}`);
+  if (!IS_CLOUD) {
+    console.log(`  Streaming: ${REMOTE_WS_URL}`);
+  }
   console.log(`─────────────────────────────────────────────────`);
 });
