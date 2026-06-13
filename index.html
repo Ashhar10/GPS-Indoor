@@ -256,10 +256,31 @@
 
   <!-- Floor/Map Style controls (Detailed map options selector) -->
   <div class="map-style-toggle">
+    <button class="style-btn" id="btn-open-3d" title="Open 3D Floor View"><i class="fa-solid fa-cube"></i></button>
     <button class="style-btn" id="btn-style-dark" title="Dark Map Theme"><i class="fa-solid fa-moon"></i></button>
     <button class="style-btn" id="btn-style-google-street" title="Google Streets"><i class="fa-solid fa-map"></i></button>
     <button class="style-btn active" id="btn-style-google-hybrid" title="Google Hybrid (Detailed Satellite)"><i class="fa-solid fa-earth-americas"></i></button>
     <button class="style-btn" id="btn-style-osm" title="OpenStreetMap"><i class="fa-solid fa-road"></i></button>
+  </div>
+
+  <!-- 3D Floor Extrusion Viewer -->
+  <div class="viewer3d-overlay" id="viewer3d-overlay">
+    <div class="viewer3d-shell">
+      <div class="viewer3d-header">
+        <div>
+          <h3>3D Floor View</h3>
+          <p id="viewer3d-subtitle">Extruded preview of the active floor layout.</p>
+        </div>
+        <button class="viewer3d-close" id="btn-close-3d" title="Close 3D View">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+      <div class="viewer3d-stage" id="viewer3d-stage"></div>
+      <div class="viewer3d-footer">
+        <span>Drag to orbit, scroll to zoom, right-drag to pan.</span>
+        <span id="viewer3d-floor-pill">Floor 1</span>
+      </div>
+    </div>
   </div>
 
   <!-- Floating Toast Notification -->
@@ -272,6 +293,9 @@
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
   <!-- Leaflet Heatmap Plugin -->
   <script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
+  <!-- Three.js -->
+  <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/examples/js/controls/OrbitControls.js"></script>
 
   <!-- App JS -->
   <script src="app.js"></script>

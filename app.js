@@ -61,12 +61,21 @@ let pendingRoomCoords = null;
 let isPlacingDoorForModal = false;
 let tempDoorsForModal = [];
 
+// 3D Viewer State
+let threeScene = null;
+let threeCamera = null;
+let threeRenderer = null;
+let threeControls = null;
+let threeAnimationFrame = null;
+let threeSceneRoot = null;
+
 // --- DOM Elements ---
 const btnFindMe = document.getElementById('btn-find-me');
 const btnStyleDark = document.getElementById('btn-style-dark');
 const btnStyleGoogleStreet = document.getElementById('btn-style-google-street');
 const btnStyleGoogleHybrid = document.getElementById('btn-style-google-hybrid');
 const btnStyleOsm = document.getElementById('btn-style-osm');
+const btnOpen3D = document.getElementById('btn-open-3d');
 const checkboxSimulator = document.getElementById('toggle-simulator');
 const valLat = document.getElementById('val-lat');
 const valLng = document.getElementById('val-lng');
@@ -89,6 +98,11 @@ const btnModalClose = document.getElementById('btn-modal-close');
 const successOverlay = document.getElementById('success-overlay');
 const successRoomName = document.getElementById('success-room-name');
 const btnSuccessClose = document.getElementById('btn-success-close');
+const viewer3DOverlay = document.getElementById('viewer3d-overlay');
+const viewer3DStage = document.getElementById('viewer3d-stage');
+const viewer3DSubtitle = document.getElementById('viewer3d-subtitle');
+const viewer3DFloorPill = document.getElementById('viewer3d-floor-pill');
+const btnClose3D = document.getElementById('btn-close-3d');
 
 // Navigation Elements
 const navStartSelect = document.getElementById('nav-start');
@@ -369,6 +383,14 @@ function locateUser(centerOnly = false) {
 // --- UI Interaction Bindings ---
 function setupUIEventListeners() {
   btnFindMe.addEventListener('click', () => locateUser(false));
+  if (btnOpen3D) btnOpen3D.addEventListener('click', open3DView);
+  if (btnClose3D) btnClose3D.addEventListener('click', close3DView);
+  if (viewer3DOverlay) {
+    viewer3DOverlay.addEventListener('click', (e) => {
+      if (e.target === viewer3DOverlay) close3DView();
+    });
+  }
+  window.addEventListener('resize', handle3DResize);
   
   // Style Toggles
   btnStyleDark.addEventListener('click', () => swapTileStyle('dark'));
@@ -765,11 +787,13 @@ function resetDraftState() {
 function saveWall(latlngs) {
   const wall = {
     id: 'wall-' + Date.now(),
+    floor: activeFloor,
     latlngs: latlngs
   };
   savedWalls.push(wall);
   renderWall(wall);
   saveFeaturesToLocalStorage();
+  request3DRefresh();
   showToast('Wall drawn successfully.');
 }
 
@@ -788,11 +812,13 @@ function renderWall(wall) {
 function saveWindow(latlngs) {
   const win = {
     id: 'window-' + Date.now(),
+    floor: activeFloor,
     latlngs: latlngs
   };
   savedWindows.push(win);
   renderWindow(win);
   saveFeaturesToLocalStorage();
+  request3DRefresh();
   showToast('Window drawn successfully.');
 }
 
@@ -855,6 +881,7 @@ function savePendingRoom() {
   
   // Redraw everything to ensure consistency
   switchActiveFloor(floor);
+  request3DRefresh();
 
   // Sync Floor Selector UI
   const floorButtons = document.querySelectorAll('.floor-btn');
@@ -938,6 +965,7 @@ function deleteFeature(id, type) {
 
   saveFeaturesToLocalStorage();
   switchActiveFloor(activeFloor); // Re-render active floor
+  request3DRefresh();
   showToast('Feature removed.');
 }
 
@@ -1092,6 +1120,8 @@ function switchActiveFloor(floor) {
   } else {
     showToast(`Switched to Floor ${activeFloor}`);
   }
+
+  request3DRefresh();
 }
 
 function updateNavigationRoomOptions() {
@@ -1170,6 +1200,7 @@ function saveBoundary(latlngs) {
   savedBoundaries.push(boundary);
   renderBoundary(boundary);
   saveFeaturesToLocalStorage();
+  request3DRefresh();
   showToast('Floor Boundary saved.');
 }
 
@@ -2046,6 +2077,376 @@ function updateWifiDevicesUI(devices, type, customMessage) {
     `;
     wifiDevicesList.appendChild(card);
   });
+}
+
+function request3DRefresh() {
+  if (viewer3DOverlay && viewer3DOverlay.classList.contains('show')) {
+    render3DScene();
+  }
+}
+
+function open3DView() {
+  if (!window.THREE || !viewer3DOverlay || !viewer3DStage) {
+    showToast('3D viewer could not be loaded.');
+    return;
+  }
+
+  viewer3DOverlay.classList.add('show');
+  ensure3DViewer();
+  render3DScene();
+  handle3DResize();
+  start3DAnimation();
+}
+
+function close3DView() {
+  if (viewer3DOverlay) {
+    viewer3DOverlay.classList.remove('show');
+  }
+  stop3DAnimation();
+}
+
+function ensure3DViewer() {
+  if (threeRenderer || !window.THREE || !viewer3DStage) return;
+
+  threeScene = new THREE.Scene();
+  threeScene.background = new THREE.Color(0x020617);
+
+  threeCamera = new THREE.PerspectiveCamera(52, 1, 0.1, 3000);
+  threeCamera.position.set(140, 140, 140);
+
+  threeRenderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+  threeRenderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  viewer3DStage.innerHTML = '';
+  viewer3DStage.appendChild(threeRenderer.domElement);
+
+  threeControls = new THREE.OrbitControls(threeCamera, threeRenderer.domElement);
+  threeControls.enableDamping = true;
+  threeControls.dampingFactor = 0.08;
+  threeControls.target.set(0, 16, 0);
+  threeControls.maxPolarAngle = Math.PI / 2.05;
+  threeControls.minDistance = 20;
+  threeControls.maxDistance = 600;
+
+  const ambient = new THREE.AmbientLight(0xffffff, 0.75);
+  threeScene.add(ambient);
+
+  const keyLight = new THREE.DirectionalLight(0xffffff, 0.95);
+  keyLight.position.set(120, 180, 80);
+  threeScene.add(keyLight);
+
+  const fillLight = new THREE.DirectionalLight(0x60a5fa, 0.35);
+  fillLight.position.set(-100, 120, -80);
+  threeScene.add(fillLight);
+
+  threeSceneRoot = new THREE.Group();
+  threeScene.add(threeSceneRoot);
+}
+
+function start3DAnimation() {
+  if (threeAnimationFrame) return;
+
+  const loop = () => {
+    if (!threeRenderer || !threeScene || !threeCamera) return;
+    if (threeControls) threeControls.update();
+    threeRenderer.render(threeScene, threeCamera);
+    threeAnimationFrame = requestAnimationFrame(loop);
+  };
+
+  threeAnimationFrame = requestAnimationFrame(loop);
+}
+
+function stop3DAnimation() {
+  if (threeAnimationFrame) {
+    cancelAnimationFrame(threeAnimationFrame);
+    threeAnimationFrame = null;
+  }
+}
+
+function handle3DResize() {
+  if (!threeRenderer || !threeCamera || !viewer3DStage || !viewer3DOverlay || !viewer3DOverlay.classList.contains('show')) return;
+
+  const width = Math.max(viewer3DStage.clientWidth, 1);
+  const height = Math.max(viewer3DStage.clientHeight, 1);
+  threeCamera.aspect = width / height;
+  threeCamera.updateProjectionMatrix();
+  threeRenderer.setSize(width, height, false);
+}
+
+function clear3DSceneRoot() {
+  if (!threeSceneRoot) return;
+
+  while (threeSceneRoot.children.length > 0) {
+    const child = threeSceneRoot.children.pop();
+    disposeThreeObject(child);
+  }
+}
+
+function disposeThreeObject(object) {
+  if (!object) return;
+
+  if (object.parent) {
+    object.parent.remove(object);
+  }
+
+  if (object.children && object.children.length > 0) {
+    [...object.children].forEach(disposeThreeObject);
+  }
+
+  if (object.geometry) {
+    object.geometry.dispose();
+  }
+
+  if (object.material) {
+    if (Array.isArray(object.material)) {
+      object.material.forEach(mat => mat.dispose());
+    } else {
+      object.material.dispose();
+    }
+  }
+}
+
+function render3DScene() {
+  ensure3DViewer();
+  if (!threeSceneRoot || !viewer3DSubtitle || !viewer3DFloorPill) return;
+
+  clear3DSceneRoot();
+
+  const rooms = savedRooms.filter(r => r.floor === activeFloor);
+  const walls = savedWalls.filter(w => w.floor === activeFloor);
+  const windowsOnFloor = savedWindows.filter(w => w.floor === activeFloor);
+  const doors = savedDoors.filter(d => d.floor === activeFloor);
+  const boundary = savedBoundaries.find(b => b.floor === activeFloor) || null;
+
+  viewer3DFloorPill.textContent = `Floor ${activeFloor}`;
+  viewer3DSubtitle.textContent = `${rooms.length} rooms, ${walls.length} walls, ${doors.length} doors on the active floor.`;
+
+  const metrics = create3DLayoutMetrics(boundary, rooms, walls, windowsOnFloor, doors);
+  const gridSize = Math.max(80, Math.ceil(metrics.span / 10) * 10);
+
+  const grid = new THREE.GridHelper(gridSize, 12, 0x334155, 0x1e293b);
+  grid.position.y = 0;
+  threeSceneRoot.add(grid);
+
+  const basePlane = new THREE.Mesh(
+    new THREE.CircleGeometry(Math.max(metrics.span * 0.58, 45), 64),
+    new THREE.MeshStandardMaterial({ color: 0x0f172a, transparent: true, opacity: 0.82 })
+  );
+  basePlane.rotation.x = -Math.PI / 2;
+  basePlane.position.y = -0.05;
+  threeSceneRoot.add(basePlane);
+
+  if (boundary && boundary.latlngs.length >= 3) {
+    addBoundaryMesh3D(boundary, metrics);
+  }
+
+  rooms.forEach(room => addRoomMesh3D(room, metrics));
+  walls.forEach(wall => addPolylineBoxes3D(wall.latlngs, metrics, { color: 0x475569, height: 16, thickness: 2.2, y: 8 }));
+  windowsOnFloor.forEach(win => addPolylineBoxes3D(win.latlngs, metrics, { color: 0x67e8f9, height: 8, thickness: 1.2, y: 10 }));
+  doors.forEach(door => addDoorMesh3D(door, metrics));
+  addUserMarker3D(metrics);
+
+  const camDistance = Math.max(85, metrics.span * 0.72);
+  threeCamera.position.set(camDistance, camDistance * 0.82, camDistance);
+  threeControls.target.set(0, 16, 0);
+  threeControls.update();
+}
+
+function create3DLayoutMetrics(boundary, rooms, walls, windowsOnFloor, doors) {
+  const points = [];
+
+  if (boundary && boundary.latlngs) points.push(...boundary.latlngs);
+  rooms.forEach(room => points.push(...room.latlngs));
+  walls.forEach(wall => points.push(...wall.latlngs));
+  windowsOnFloor.forEach(win => points.push(...win.latlngs));
+  doors.forEach(door => points.push(door.latlng));
+
+  if (points.length === 0) {
+    points.push([currentGpsCoords.lat, currentGpsCoords.lng]);
+    points.push([currentGpsCoords.lat + 0.00015, currentGpsCoords.lng + 0.00015]);
+  }
+
+  let minLat = Infinity;
+  let maxLat = -Infinity;
+  let minLng = Infinity;
+  let maxLng = -Infinity;
+
+  points.forEach(pt => {
+    minLat = Math.min(minLat, pt[0]);
+    maxLat = Math.max(maxLat, pt[0]);
+    minLng = Math.min(minLng, pt[1]);
+    maxLng = Math.max(maxLng, pt[1]);
+  });
+
+  const centerLat = (minLat + maxLat) / 2;
+  const centerLng = (minLng + maxLng) / 2;
+  const latSpan = Math.max(maxLat - minLat, 0.00008);
+  const lngSpan = Math.max(maxLng - minLng, 0.00008);
+  const degreeSpan = Math.max(latSpan, lngSpan);
+  const scale = 220 / degreeSpan;
+
+  return {
+    centerLat,
+    centerLng,
+    scale,
+    span: Math.max(latSpan * scale, lngSpan * scale, 70)
+  };
+}
+
+function projectLatLngTo3D(latlng, metrics) {
+  return {
+    x: (latlng[1] - metrics.centerLng) * metrics.scale,
+    z: (metrics.centerLat - latlng[0]) * metrics.scale
+  };
+}
+
+function createShapeFromLatLngs(latlngs, metrics) {
+  const projected = latlngs.map(pt => projectLatLngTo3D(pt, metrics));
+  if (projected.length < 3) return null;
+
+  const shape = new THREE.Shape();
+  shape.moveTo(projected[0].x, projected[0].z);
+  for (let i = 1; i < projected.length; i++) {
+    shape.lineTo(projected[i].x, projected[i].z);
+  }
+  shape.lineTo(projected[0].x, projected[0].z);
+  return { shape, projected };
+}
+
+function addBoundaryMesh3D(boundary, metrics) {
+  const data = createShapeFromLatLngs(boundary.latlngs, metrics);
+  if (!data) return;
+
+  const floorGeometry = new THREE.ShapeGeometry(data.shape);
+  floorGeometry.rotateX(-Math.PI / 2);
+
+  const floorMesh = new THREE.Mesh(
+    floorGeometry,
+    new THREE.MeshStandardMaterial({
+      color: 0xf59e0b,
+      transparent: true,
+      opacity: 0.11,
+      side: THREE.DoubleSide
+    })
+  );
+  floorMesh.position.y = 0.03;
+  threeSceneRoot.add(floorMesh);
+
+  const outlinePoints = data.projected.map(pt => new THREE.Vector3(pt.x, 0.18, pt.z));
+  outlinePoints.push(new THREE.Vector3(data.projected[0].x, 0.18, data.projected[0].z));
+  const outlineGeometry = new THREE.BufferGeometry().setFromPoints(outlinePoints);
+  const outline = new THREE.Line(
+    outlineGeometry,
+    new THREE.LineBasicMaterial({ color: 0xf59e0b })
+  );
+  threeSceneRoot.add(outline);
+}
+
+function addRoomMesh3D(room, metrics) {
+  const data = createShapeFromLatLngs(room.latlngs, metrics);
+  if (!data) return;
+
+  const height = getRoomHeight(room.category);
+  const roomColor = getRoomColor(room.category);
+  const geometry = new THREE.ExtrudeGeometry(data.shape, {
+    depth: height,
+    bevelEnabled: false
+  });
+  geometry.rotateX(-Math.PI / 2);
+
+  const material = new THREE.MeshStandardMaterial({
+    color: roomColor,
+    transparent: true,
+    opacity: room.id === activeRoomId ? 0.92 : 0.82,
+    roughness: 0.58,
+    metalness: 0.08
+  });
+
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.position.y = 0.1;
+  threeSceneRoot.add(mesh);
+
+  const edges = new THREE.LineSegments(
+    new THREE.EdgesGeometry(geometry),
+    new THREE.LineBasicMaterial({ color: room.id === activeRoomId ? 0xffffff : 0x93c5fd })
+  );
+  edges.position.copy(mesh.position);
+  threeSceneRoot.add(edges);
+}
+
+function addPolylineBoxes3D(latlngs, metrics, config) {
+  if (!latlngs || latlngs.length < 2) return;
+
+  for (let i = 0; i < latlngs.length - 1; i++) {
+    const start = projectLatLngTo3D(latlngs[i], metrics);
+    const end = projectLatLngTo3D(latlngs[i + 1], metrics);
+    const dx = end.x - start.x;
+    const dz = end.z - start.z;
+    const length = Math.sqrt(dx * dx + dz * dz);
+    if (length === 0) continue;
+
+    const mesh = new THREE.Mesh(
+      new THREE.BoxGeometry(length, config.height, config.thickness),
+      new THREE.MeshStandardMaterial({
+        color: config.color,
+        transparent: true,
+        opacity: 0.95
+      })
+    );
+
+    mesh.position.set((start.x + end.x) / 2, config.y, (start.z + end.z) / 2);
+    mesh.rotation.y = Math.atan2(dz, dx);
+    threeSceneRoot.add(mesh);
+  }
+}
+
+function addDoorMesh3D(door, metrics) {
+  const pos = projectLatLngTo3D(door.latlng, metrics);
+  const doorMesh = new THREE.Mesh(
+    new THREE.BoxGeometry(6, 8, 2),
+    new THREE.MeshStandardMaterial({ color: 0x10b981, roughness: 0.35, metalness: 0.12 })
+  );
+  doorMesh.position.set(pos.x, 4, pos.z);
+  threeSceneRoot.add(doorMesh);
+}
+
+function addUserMarker3D(metrics) {
+  const pos = projectLatLngTo3D([currentGpsCoords.lat, currentGpsCoords.lng], metrics);
+  const marker = new THREE.Mesh(
+    new THREE.SphereGeometry(3.2, 20, 20),
+    new THREE.MeshStandardMaterial({ color: 0x3b82f6, emissive: 0x1d4ed8, emissiveIntensity: 0.35 })
+  );
+  marker.position.set(pos.x, 6, pos.z);
+  threeSceneRoot.add(marker);
+}
+
+function getRoomHeight(category) {
+  const heights = {
+    hallway: 10,
+    stairs: 14,
+    restroom: 11,
+    conference: 13,
+    lab: 14,
+    classroom: 13,
+    office: 12,
+    other: 12
+  };
+
+  return heights[category] || 12;
+}
+
+function getRoomColor(category) {
+  const colors = {
+    office: 0x3b82f6,
+    lab: 0x8b5cf6,
+    conference: 0xf59e0b,
+    classroom: 0x14b8a6,
+    restroom: 0xef4444,
+    hallway: 0x64748b,
+    stairs: 0x10b981,
+    other: 0x6366f1
+  };
+
+  return colors[category] || 0x6366f1;
 }
 
 

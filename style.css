@@ -635,6 +635,100 @@ body {
   color: white;
 }
 
+.viewer3d-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(3, 7, 18, 0.72);
+  backdrop-filter: blur(10px);
+  z-index: 11000;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.viewer3d-overlay.show {
+  display: flex;
+}
+
+.viewer3d-shell {
+  width: min(1200px, 100%);
+  height: min(780px, 100%);
+  background: rgba(15, 23, 42, 0.96);
+  border: 1px solid var(--border-color);
+  border-radius: 18px;
+  overflow: hidden;
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.45);
+  display: flex;
+  flex-direction: column;
+}
+
+.viewer3d-header,
+.viewer3d-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 18px;
+  background: rgba(255, 255, 255, 0.03);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.viewer3d-header h3 {
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.viewer3d-header p,
+.viewer3d-footer span {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+}
+
+.viewer3d-footer {
+  border-bottom: none;
+  border-top: 1px solid var(--border-color);
+}
+
+.viewer3d-close {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.viewer3d-close:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.viewer3d-stage {
+  flex: 1;
+  min-height: 320px;
+  position: relative;
+  background:
+    radial-gradient(circle at top, rgba(59, 130, 246, 0.18), transparent 40%),
+    linear-gradient(180deg, #0f172a 0%, #020617 100%);
+}
+
+.viewer3d-stage canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+#viewer3d-floor-pill {
+  color: var(--text-primary);
+  background: rgba(59, 130, 246, 0.16);
+  border: 1px solid rgba(59, 130, 246, 0.32);
+  border-radius: 999px;
+  padding: 6px 10px;
+  font-weight: 600;
+}
+
 /* Toast alert styling */
 .toast {
   position: absolute;
@@ -946,6 +1040,25 @@ body {
   .success-card {
     width: 92vw;
     padding: 10px 16px;
+  }
+
+  .viewer3d-overlay {
+    padding: 12px;
+  }
+
+  .viewer3d-shell {
+    height: min(92vh, 100%);
+    border-radius: 16px;
+  }
+
+  .viewer3d-header,
+  .viewer3d-footer {
+    padding: 12px 14px;
+  }
+
+  .viewer3d-footer {
+    flex-direction: column;
+    align-items: flex-start;
   }
 }
 
