@@ -358,6 +358,16 @@ function getAgentNetworks() {
   return networks;
 }
 
+function getLocalAgentDescriptor() {
+  const networks = getAgentNetworks();
+  const primaryNetwork = networks[0];
+
+  return {
+    agentIp: primaryNetwork ? primaryNetwork.ip : '127.0.0.1',
+    networks
+  };
+}
+
 // ─── Scan & Triangulate ───────────────────────────────────────────────
 function performScanAndTriangulate() {
   // If running on cloud, we rely on the local agent publishing data.
@@ -413,8 +423,18 @@ function performScanAndTriangulate() {
       points.push(result.point);
     });
 
+    const localAgent = getLocalAgentDescriptor();
+    activeAgents.set(localAgent.agentIp, {
+      devices,
+      points,
+      timestamp: Date.now(),
+      agentIp: localAgent.agentIp,
+      agentNetworks: localAgent.networks
+    });
+
     // Broadcast locally to local WebSocket clients (e.g. localhost page)
-    broadcastPayload(devices, points, 'live', '127.0.0.1');
+    broadcastPayload(devices, points, 'live', localAgent.agentIp, localAgent.networks);
+    broadcastAgentList();
 
     // Publish/Forward scans to remote Render WebSocket server
     if (remoteWs && remoteWs.readyState === 1) { // OPEN
@@ -439,9 +459,26 @@ function broadcastAgentList() {
 function sendAgentList(ws) {
   if (!ws || ws.readyState !== 1) return;
 
-  const agents = Array.from(activeAgents.values()).map(a => ({
+  const agentsMap = new Map();
+
+  if (!IS_CLOUD) {
+    const localAgent = getLocalAgentDescriptor();
+    agentsMap.set(localAgent.agentIp, {
+      agentIp: localAgent.agentIp,
+      networks: localAgent.networks
+    });
+  }
+
+  Array.from(activeAgents.values()).forEach(a => {
+    agentsMap.set(a.agentIp, {
+      agentIp: a.agentIp,
+      networks: a.agentNetworks
+    });
+  });
+
+  const agents = Array.from(agentsMap.values()).map(a => ({
     agentIp: a.agentIp,
-    networks: a.agentNetworks
+    networks: a.networks
   }));
 
   ws.send(JSON.stringify({
