@@ -100,6 +100,8 @@ const wifiScanHud = document.getElementById('wifi-scan-hud');
 const wifiConnectionStatus = document.getElementById('wifi-connection-status');
 const wifiScannerIpInput = document.getElementById('wifi-scanner-ip');
 const wifiNetworkFilter = document.getElementById('wifi-network-filter');
+const wifiFilterRespectiveContainer = document.getElementById('wifi-filter-respective-container');
+const wifiFilterRespective = document.getElementById('wifi-filter-respective');
 const wifiDeviceCount = document.getElementById('wifi-device-count');
 const wifiDevicesList = document.getElementById('wifi-devices-list');
 
@@ -460,10 +462,12 @@ function setupUIEventListeners() {
       isWifiScannerEnabled = e.target.checked;
       if (isWifiScannerEnabled) {
         if (wifiScanHud) wifiScanHud.style.display = 'flex';
+        if (wifiFilterRespectiveContainer) wifiFilterRespectiveContainer.style.display = 'block';
         initHeatmap();
         connectToWifiWS();
       } else {
         if (wifiScanHud) wifiScanHud.style.display = 'none';
+        if (wifiFilterRespectiveContainer) wifiFilterRespectiveContainer.style.display = 'none';
         disconnectWifiWS();
         if (heatmapLayer) {
           map.removeLayer(heatmapLayer);
@@ -516,6 +520,31 @@ function setupUIEventListeners() {
       activeSubnetFilter = e.target.value;
       localStorage.setItem('mazemap_wifi_subnet_filter', activeSubnetFilter);
       showToast(`Filtering to: ${e.target.options[e.target.selectedIndex].text}`);
+      
+      // If the user manually changes the dropdown, disable the respective auto-filter checkbox
+      if (wifiFilterRespective && wifiFilterRespective.checked) {
+        wifiFilterRespective.checked = false;
+        localStorage.setItem('mazemap_wifi_filter_respective', false);
+      }
+      
+      if (lastWifiScannerMessage) {
+        processWifiScannerMessage(lastWifiScannerMessage);
+      }
+    });
+  }
+
+  // WiFi Scanner Respective Network Filter Checkbox
+  if (wifiFilterRespective) {
+    const savedRespective = localStorage.getItem('mazemap_wifi_filter_respective') === 'true';
+    wifiFilterRespective.checked = savedRespective;
+    
+    wifiFilterRespective.addEventListener('change', (e) => {
+      localStorage.setItem('mazemap_wifi_filter_respective', e.target.checked);
+      if (e.target.checked) {
+        showToast('Auto-filtering to your respective network...');
+      } else {
+        showToast('Respective network filter disabled. Showing selected dropdown network.');
+      }
       if (lastWifiScannerMessage) {
         processWifiScannerMessage(lastWifiScannerMessage);
       }
@@ -1656,6 +1685,34 @@ function connectToWifiWS() {
   }
 }
 
+function detectRespectiveSubnet(subnetsList) {
+  if (subnetsList.length === 0) return 'all';
+  
+  // 1. Check for standard mobile hotspots
+  const hotspots = ['192.168.43.', '172.20.10.', '192.168.137.'];
+  for (const prefix of hotspots) {
+    if (subnetsList.includes(prefix)) {
+      return prefix;
+    }
+  }
+
+  // 2. If we are on mobile, and there is only one non-demo subnet, select it
+  const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+  const realSubnets = subnetsList.filter(s => s !== '192.168.1.'); // 192.168.1. is our Demo subnet
+  if (isMobile && realSubnets.length === 1) {
+    return realSubnets[0];
+  }
+
+  // 3. Return the first non-virtual, non-demo subnet
+  for (const s of realSubnets) {
+    if (!s.startsWith('192.168.56.') && !s.startsWith('192.168.99.')) {
+      return s;
+    }
+  }
+
+  return subnetsList[0];
+}
+
 function processWifiScannerMessage(message) {
   if (message.type !== 'wifi-heatmap') return;
   
@@ -1672,17 +1729,29 @@ function processWifiScannerMessage(message) {
   }
   updateSubnetFilterDropdown(subnets);
   
+  // Determine filter to use (respective auto-filter vs dropdown selection)
+  let filterToUse = activeSubnetFilter;
+  if (wifiFilterRespective && wifiFilterRespective.checked) {
+    const subnetsList = Object.keys(subnets);
+    filterToUse = detectRespectiveSubnet(subnetsList);
+    if (wifiNetworkFilter && wifiNetworkFilter.value !== filterToUse) {
+      wifiNetworkFilter.value = filterToUse;
+      activeSubnetFilter = filterToUse;
+      localStorage.setItem('mazemap_wifi_subnet_filter', filterToUse);
+    }
+  }
+  
   // Filter devices and heatmap points
   let filteredDevices = message.devices || [];
   let filteredPoints = message.points || [];
   
-  if (activeSubnetFilter !== 'all') {
-    filteredDevices = filteredDevices.filter(d => d.subnetPrefix === activeSubnetFilter);
+  if (filterToUse !== 'all') {
+    filteredDevices = filteredDevices.filter(d => d.subnetPrefix === filterToUse);
     
     // Match points 1-to-1 with devices
     const tempPoints = [];
     (message.devices || []).forEach((d, idx) => {
-      if (d.subnetPrefix === activeSubnetFilter) {
+      if (d.subnetPrefix === filterToUse) {
         tempPoints.push(message.points[idx]);
       }
     });
