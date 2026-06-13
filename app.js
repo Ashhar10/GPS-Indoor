@@ -31,17 +31,12 @@ let savedWindows = [];
 let savedDoors = [];
 let activeFloor = '1';
 
-// Crowd Simulation & Tracking state
-let isCrowdAnalyticsEnabled = false;
-let simulatedAgents = [];
-let agentUpdateIntervalId = null;
-let roomOccupancies = {};
-let simulatedHour = 10;
+// WiFi Network Scanner State
+let isWifiScannerEnabled = false;
+let wifiWebSocket = null;
+let wifiHeatmapPoints = [];
 
-// Live Camera (DensePose) WebSocket state
-let activeTrafficSource = 'simulation'; // 'simulation' or 'live'
-let liveWebSocket = null;
-let liveWsUrl = 'ws://localhost:8080';
+
 
 // Leaflet Layer groups to host vectors on map
 let boundariesLayerGroup;
@@ -97,20 +92,14 @@ const navEndSelect = document.getElementById('nav-end');
 const btnFindPath = document.getElementById('btn-find-path');
 const btnClearPath = document.getElementById('btn-clear-path');
 
-// Time of Day HUD Elements
-const heatmapTimeControl = document.getElementById('heatmap-time-control');
-const simTimeSlider = document.getElementById('sim-time-slider');
-const simTimeDisplay = document.getElementById('sim-time-display');
-const simTimeDesc = document.getElementById('sim-time-desc');
+// WiFi Scanner DOM Elements
+const checkboxWifiScanner = document.getElementById('toggle-wifi-scanner');
+const wifiScanHud = document.getElementById('wifi-scan-hud');
+const wifiConnectionStatus = document.getElementById('wifi-connection-status');
+const wifiDeviceCount = document.getElementById('wifi-device-count');
+const wifiDevicesList = document.getElementById('wifi-devices-list');
 
-// Live DensePose HUD Elements
-const crowdConfigHud = document.getElementById('crowd-config-hud');
-const btnSourceSimulation = document.getElementById('source-btn-simulation');
-const btnSourceLive = document.getElementById('source-btn-live');
-const heatmapLiveControl = document.getElementById('heatmap-live-control');
-const liveConnectionStatus = document.getElementById('live-connection-status');
-const liveWsUrlInput = document.getElementById('live-ws-url-input');
-const btnToggleLiveConn = document.getElementById('btn-toggle-live-conn');
+
 
 const toolButtons = {
   select: document.getElementById('tool-select'),
@@ -287,12 +276,7 @@ function checkIndoorProximity(lat, lng) {
       highlightActiveRoomOnMap(containingRoom.id);
       
       // Show "Maze Map Done" Celebration Notification overlay
-      let countText = "";
-      if (isCrowdAnalyticsEnabled) {
-        const count = roomOccupancies[containingRoom.id] || 0;
-        countText = ` (Occupancy: ${count})`;
-      }
-      successRoomName.textContent = containingRoom.name + countText;
+      successRoomName.textContent = containingRoom.name;
       successOverlay.classList.add('show');
       
       showToast(`Welcome to ${containingRoom.name}! Proximity verified.`);
@@ -466,99 +450,21 @@ function setupUIEventListeners() {
   btnFindPath.addEventListener('click', calculateAndDrawPath);
   btnClearPath.addEventListener('click', clearNavigationPath);
 
-  // Traffic Heatmap Toggle Switch
-  // Crowd Analytics Toggle Switch
-  const checkboxCrowdAnalytics = document.getElementById('toggle-crowd-analytics');
-  if (checkboxCrowdAnalytics) {
-    checkboxCrowdAnalytics.addEventListener('change', (e) => {
-      isCrowdAnalyticsEnabled = e.target.checked;
-      if (isCrowdAnalyticsEnabled) {
-        if (activeTrafficSource === 'simulation') {
-          startCrowdSimulation();
-        }
-        if (crowdConfigHud) crowdConfigHud.style.display = 'flex';
+  // WiFi Scanner Toggle Switch
+  if (checkboxWifiScanner) {
+    checkboxWifiScanner.addEventListener('change', (e) => {
+      isWifiScannerEnabled = e.target.checked;
+      if (isWifiScannerEnabled) {
+        if (wifiScanHud) wifiScanHud.style.display = 'flex';
+        initHeatmap();
+        connectToWifiWS();
       } else {
-        stopCrowdSimulation();
-        disconnectLiveWS();
-        if (crowdConfigHud) crowdConfigHud.style.display = 'none';
-      }
-    });
-  }
-
-  // Heatmap Source Toggle Buttons
-  if (btnSourceSimulation && btnSourceLive) {
-    btnSourceSimulation.addEventListener('click', () => {
-      if (activeTrafficSource === 'simulation') return;
-      activeTrafficSource = 'simulation';
-      
-      btnSourceSimulation.classList.add('active');
-      btnSourceLive.classList.remove('active');
-      
-      if (heatmapLiveControl) heatmapLiveControl.style.display = 'none';
-      if (heatmapTimeControl) heatmapTimeControl.style.display = 'flex';
-      
-      disconnectLiveWS();
-      
-      if (isCrowdAnalyticsEnabled) {
-        startCrowdSimulation();
-      }
-    });
-
-    btnSourceLive.addEventListener('click', () => {
-      if (activeTrafficSource === 'live') return;
-      activeTrafficSource = 'live';
-      
-      btnSourceLive.classList.add('active');
-      btnSourceSimulation.classList.remove('active');
-      
-      if (heatmapTimeControl) heatmapTimeControl.style.display = 'none';
-      if (heatmapLiveControl) heatmapLiveControl.style.display = 'flex';
-      
-      stopCrowdSimulation();
-      
-      // Clear room occupancy badges to 0 until WebSocket payload arrives
-      savedRooms.forEach(room => {
-        const badge = document.getElementById(`occupancy-badge-${room.id}`);
-        if (badge) {
-          badge.innerHTML = `<i class="fa-solid fa-users"></i> 0`;
-          badge.className = 'room-dir-occupants';
+        if (wifiScanHud) wifiScanHud.style.display = 'none';
+        disconnectWifiWS();
+        if (heatmapLayer) {
+          map.removeLayer(heatmapLayer);
+          heatmapLayer = null;
         }
-      });
-    });
-  }
-
-  // Connect/Disconnect Button for Live DensePose
-  if (btnToggleLiveConn) {
-    btnToggleLiveConn.addEventListener('click', () => {
-      if (liveWebSocket && (liveWebSocket.readyState === WebSocket.OPEN || liveWebSocket.readyState === WebSocket.CONNECTING)) {
-        disconnectLiveWS();
-      } else {
-        connectToLiveWS();
-      }
-    });
-  }
-
-  // Time of Day Slider Listener
-  if (simTimeSlider) {
-    simTimeSlider.addEventListener('input', (e) => {
-      simulatedHour = parseInt(e.target.value);
-      if (simTimeDisplay) simTimeDisplay.textContent = formatHour(simulatedHour);
-      if (simTimeDesc) simTimeDesc.textContent = getTimeOfDayDescription(simulatedHour);
-      
-      // Trigger quick evaluation for agents to adapt to schedule change
-      if (simulatedAgents.length > 0) {
-        simulatedAgents.forEach(agent => {
-          if (agent.state === 'resting') {
-            const currentRoom = savedRooms.find(r => r.id === agent.destRoomId);
-            if (currentRoom) {
-              const currentWeight = getCategoryWeight(currentRoom.category, simulatedHour);
-              // If the room becomes unattractive at this hour, give them a high chance to migrate
-              if (currentWeight < 0.25 && Math.random() < 0.65) {
-                agent.restTicks = Math.floor(Math.random() * 5) + 1; // leave within 1-5 ticks (approx 0.3s)
-              }
-            }
-          }
-        });
       }
     });
   }
@@ -960,17 +866,12 @@ function updateRoomDirectoryUI() {
   }
 
   roomsOnFloor.forEach(room => {
-    // Retrieve occupant count from the synchronized cache
-    const count = isCrowdAnalyticsEnabled ? (roomOccupancies[room.id] || 0) : 0;
-    const isCrowded = count > 10;
-    const badgeClass = isCrowded ? 'room-dir-occupants crowded' : 'room-dir-occupants';
-
     const item = document.createElement('li');
     item.className = 'room-dir-item';
     item.innerHTML = `
       <div class="room-dir-info">
         <span class="room-dir-name">${room.name}</span>
-        <span class="room-dir-cat">${room.category} <span class="${badgeClass}" id="occupancy-badge-${room.id}"><i class="fa-solid fa-users"></i> ${count}</span></span>
+        <span class="room-dir-cat">${room.category}</span>
       </div>
       <div class="room-dir-actions">
         <button class="room-dir-btn zoom" title="Zoom to room"><i class="fa-solid fa-expand"></i></button>
@@ -1077,16 +978,7 @@ function switchActiveFloor(floor) {
   // Update dropdown select menus
   updateNavigationRoomOptions();
 
-  // Restart crowd simulation or reset live data for the new floor if crowd analytics is enabled
-  if (isCrowdAnalyticsEnabled) {
-    if (activeTrafficSource === 'simulation') {
-      stopCrowdSimulation(false);
-      startCrowdSimulation();
-    } else {
-      roomOccupancies = {};
-      updateRoomDirectoryUI();
-    }
-  }
+
 
   // If a pending multi-floor route exists for this floor, draw it
   if (window.pendingDestinationPath && window.pendingDestinationPath.floor === floor) {
@@ -1598,12 +1490,10 @@ function runAStar(startLatLng, endLatLng, boundary, floor) {
   return path;
 }
 
-// --- CROWD TRAFFIC SIMULATOR & HEATMAP OVERLAY ---
-
+// --- Leaflet Heatmap Layer Initialization ---
+let heatmapLayer = null;
 function initHeatmap() {
   if (!heatmapLayer) {
-    // Custom gradient: blue -> cyan -> green -> yellow/orange -> red
-    // Expanded radius (35) and blur (20) to spread heat naturally over the floor area
     heatmapLayer = L.heatLayer([], {
       radius: 35,
       blur: 20,
@@ -1612,556 +1502,185 @@ function initHeatmap() {
         0.1: '#3b82f6', // Cool Blue (Low traffic)
         0.3: '#06b6d4', // Cyan
         0.5: '#10b981', // Green (Normal traffic)
-        0.7: '#f59e0b', // Orange (Medium density: 6-10 people)
-        1.0: '#ef4444'  // Red (High density: >10 people)
+        0.7: '#f59e0b', // Orange (Medium density)
+        1.0: '#ef4444'  // Red (High density)
       }
     }).addTo(map);
   }
 }
 
-// Generates smooth coordinates between grid cells
-function interpolatePath(path, stepsPerSegment = 5) {
-  if (path.length < 2) return path;
-  
-  const result = [];
-  for (let i = 0; i < path.length - 1; i++) {
-    const p1 = path[i];
-    const p2 = path[i + 1];
-    
-    for (let step = 0; step < stepsPerSegment; step++) {
-      const t = step / stepsPerSegment;
-      const lat = p1[0] + (p2[0] - p1[0]) * t;
-      const lng = p1[1] + (p2[1] - p1[1]) * t;
-      result.push([lat, lng]);
-    }
-  }
-  result.push(path[path.length - 1]);
-  return result;
-}
+// --- WIFI SUBNET SCANNER CLIENT & REAL-TIME HEATMAP ---
 
-// Generates smooth coordinates between two points
-function interpolateTwoPoints(p1, p2, steps = 5) {
-  if (!p1 || !p2) return [];
-  const result = [];
-  for (let step = 0; step < steps; step++) {
-    const t = step / steps;
-    const lat = p1[0] + (p2[0] - p1[0]) * t;
-    const lng = p1[1] + (p2[1] - p1[1]) * t;
-    result.push([lat, lng]);
-  }
-  return result;
-}
-
-// Selects a random point inside the room polygon using rejection sampling
-function getRandomPointInRoom(room) {
-  const vs = room.latlngs;
-  if (!vs || vs.length === 0) return null;
-  
-  let minLat = vs[0][0], maxLat = vs[0][0];
-  let minLng = vs[0][1], maxLng = vs[0][1];
-  for (let i = 1; i < vs.length; i++) {
-    const lat = vs[i][0];
-    const lng = vs[i][1];
-    if (lat < minLat) minLat = lat;
-    if (lat > maxLat) maxLat = lat;
-    if (lng < minLng) minLng = lng;
-    if (lng > maxLng) maxLng = lng;
-  }
-  
-  // Rejection sampling: try up to 30 times to find a point inside the polygon
-  for (let iter = 0; iter < 30; iter++) {
-    const lat = minLat + Math.random() * (maxLat - minLat);
-    const lng = minLng + Math.random() * (maxLng - minLng);
-    if (isPointInPolygon([lat, lng], vs)) {
-      return [lat, lng];
-    }
-  }
-  
-  // Fallback: calculate centroid of the room
-  let sumLat = 0, sumLng = 0;
-  vs.forEach(pt => {
-    sumLat += pt[0];
-    sumLng += pt[1];
-  });
-  return [sumLat / vs.length, sumLng / vs.length];
-}
-
-// Moves a coordinate towards a target by a maximum step size
-function moveTowards(current, target, maxStep) {
-  const dLat = target[0] - current[0];
-  const dLng = target[1] - current[1];
-  const dist = Math.sqrt(dLat * dLat + dLng * dLng);
-  if (dist <= maxStep) {
-    return { pos: target, reached: true };
-  }
-  const ratio = maxStep / dist;
-  return {
-    pos: [
-      current[0] + dLat * ratio,
-      current[1] + dLng * ratio
-    ],
-    reached: false
-  };
-}
-
-// Formats simulated hour integer into 12-hour AM/PM string
-function formatHour(hour) {
-  if (hour === 0) return "12:00 AM";
-  if (hour === 12) return "12:00 PM";
-  if (hour > 12) return `${hour - 12}:00 PM`;
-  return `${hour}:00 AM`;
-}
-
-// Returns a human-friendly description of active locations based on the hour
-function getTimeOfDayDescription(hour) {
-  if (hour >= 22 || hour < 7) {
-    return "Night Hours: Building mostly empty; light research lab activity.";
-  } else if (hour >= 7 && hour < 11) {
-    return "Morning Rush: Classrooms and faculty offices highly active.";
-  } else if (hour >= 11 && hour < 14) {
-    return "Lunch Break: High density in lounges, cafes, and common areas.";
-  } else if (hour >= 14 && hour < 18) {
-    return "Afternoon Study: Balanced activity across classrooms, labs, and offices.";
-  } else {
-    return "Evening Hours: Night classes and students studying late in labs.";
-  }
-}
-
-// Maps room category and hour of day to relative probability weights
-function getCategoryWeight(category, hour) {
-  if (category === 'stairs' || category === 'hallway') return 0.02; // Transit areas
-  
-  if (hour >= 22 || hour < 7) { // Night
-    if (category === 'lab') return 0.1;
-    if (category === 'other') return 0.05;
-    return 0.01;
-  } else if (hour >= 7 && hour < 11) { // Morning
-    if (category === 'classroom') return 0.8;
-    if (category === 'office') return 0.7;
-    if (category === 'other') return 0.4;
-    if (category === 'lab') return 0.3;
-    return 0.1;
-  } else if (hour >= 11 && hour < 14) { // Lunch
-    if (category === 'other') return 0.9; // lounges, cafeteria
-    if (category === 'office') return 0.4;
-    if (category === 'lab') return 0.4;
-    if (category === 'classroom') return 0.2;
-    return 0.15;
-  } else if (hour >= 14 && hour < 18) { // Afternoon
-    if (category === 'office') return 0.8;
-    if (category === 'classroom') return 0.7;
-    if (category === 'lab') return 0.7;
-    if (category === 'conference') return 0.5;
-    if (category === 'other') return 0.4;
-    return 0.1;
-  } else { // Evening (18 to 22)
-    if (category === 'lab') return 0.5;
-    if (category === 'classroom') return 0.3;
-    if (category === 'other') return 0.4;
-    if (category === 'office') return 0.2;
-    return 0.05;
-  }
-}
-
-// Selects a destination room based on relative category probability weights
-function selectDestinationRoomBySchedule(roomsWithDoors, hour) {
-  if (roomsWithDoors.length === 0) return null;
-  if (roomsWithDoors.length === 1) return roomsWithDoors[0];
-  
-  const weights = roomsWithDoors.map(room => getCategoryWeight(room.category, hour));
-  const totalWeight = weights.reduce((sum, w) => sum + w, 0);
-  
-  if (totalWeight <= 0) {
-    return roomsWithDoors[Math.floor(Math.random() * roomsWithDoors.length)];
-  }
-  
-  let rand = Math.random() * totalWeight;
-  for (let i = 0; i < roomsWithDoors.length; i++) {
-    rand -= weights[i];
-    if (rand <= 0) {
-      return roomsWithDoors[i];
-    }
-  }
-  return roomsWithDoors[roomsWithDoors.length - 1];
-}
-
-function startCrowdSimulation() {
-  stopCrowdSimulation();
-  
-  const boundary = savedBoundaries.find(b => b.floor === activeFloor);
-  if (!boundary) {
-    alert(`Please draw a Floor Boundary for Floor ${activeFloor} first to define the walkable simulation perimeter!`);
-    const checkboxCrowdAnalytics = document.getElementById('toggle-crowd-analytics');
-    if (checkboxCrowdAnalytics) checkboxCrowdAnalytics.checked = false;
-    isCrowdAnalyticsEnabled = false;
-    return;
-  }
-  
-  const roomsOnFloor = savedRooms.filter(r => r.floor === activeFloor);
-  if (roomsOnFloor.length < 2) {
-    alert("Please draw at least 2 rooms (with doors) on this floor to simulate traffic routing.");
-    const checkboxCrowdAnalytics = document.getElementById('toggle-crowd-analytics');
-    if (checkboxCrowdAnalytics) checkboxCrowdAnalytics.checked = false;
-    isCrowdAnalyticsEnabled = false;
-    return;
-  }
-  
-  const roomsWithDoors = roomsOnFloor.filter(room => savedDoors.some(d => d.roomId === room.id && d.floor === activeFloor));
-  if (roomsWithDoors.length < 2) {
-    alert("Please ensure at least 2 rooms on this floor have doors placed so agents can navigate between them.");
-    const checkboxCrowdAnalytics = document.getElementById('toggle-crowd-analytics');
-    if (checkboxCrowdAnalytics) checkboxCrowdAnalytics.checked = false;
-    isCrowdAnalyticsEnabled = false;
-    return;
-  }
-
-  showToast('Spawning crowd agents...');
-  
-  const numAgents = 65;
-  for (let i = 0; i < numAgents; i++) {
-    setTimeout(() => {
-      if (!isCrowdAnalyticsEnabled || activeFloor !== boundary.floor) return;
-      
-      const startRoom = roomsWithDoors[Math.floor(Math.random() * roomsWithDoors.length)];
-      let destRoom = selectDestinationRoomBySchedule(roomsWithDoors, simulatedHour);
-      while (destRoom.id === startRoom.id && roomsWithDoors.length > 1) {
-        destRoom = selectDestinationRoomBySchedule(roomsWithDoors, simulatedHour);
-      }
-      
-      const startDoors = savedDoors.filter(d => d.roomId === startRoom.id && d.floor === activeFloor);
-      const endDoors = savedDoors.filter(d => d.roomId === destRoom.id && d.floor === activeFloor);
-      
-      if (startDoors.length > 0 && endDoors.length > 0) {
-        const rawPath = runPathfindingOnFloor(startRoom, destRoom, activeFloor);
-        if (rawPath) {
-          const startDoor = startDoors[0].latlng;
-          const endDoor = endDoors[0].latlng;
-          
-          const spawnLatLng = getRandomPointInRoom(startRoom);
-          const destLatLng = getRandomPointInRoom(destRoom);
-          
-          const roomEnterPath = interpolateTwoPoints(spawnLatLng, startDoor, 5);
-          const hallwayPath = interpolatePath(rawPath, 5);
-          const roomExitPath = interpolateTwoPoints(endDoor, destLatLng, 5);
-          
-          const fullPath = [...roomEnterPath, ...hallwayPath, ...roomExitPath];
-          
-          // Persistent random offset (+/- 2.5 meters in degrees) 
-          // to spread agents across the entire width of hallways and rooms
-          const offsetLat = (Math.random() - 0.5) * 0.000045;
-          const offsetLng = (Math.random() - 0.5) * 0.000045;
-          
-          simulatedAgents.push({
-            id: 'agent-' + i,
-            path: fullPath,
-            pathIndex: 0,
-            latlng: fullPath[0],
-            state: 'walking',
-            restTicks: 0,
-            startRoomId: startRoom.id,
-            destRoomId: destRoom.id,
-            floor: activeFloor,
-            offsetLat: offsetLat,
-            offsetLng: offsetLng,
-            roomTargetLatLng: null,
-            pauseTicks: 0
-          });
-        }
-      }
-    }, i * 30);
-  }
-  
-  // Real-time ticking updates at 60ms (approx. 16 frames/second)
-  agentUpdateIntervalId = setInterval(updateAgents, 60);
-}
-
-function updateAgents() {
-  if (simulatedAgents.length === 0) return;
-  
-  const roomsOnFloor = savedRooms.filter(r => r.floor === activeFloor);
-  const roomsWithDoors = roomsOnFloor.filter(room => savedDoors.some(d => d.roomId === room.id && d.floor === activeFloor));
-  
-  simulatedAgents.forEach(agent => {
-    if (agent.floor !== activeFloor) return;
-    
-    if (agent.state === 'walking') {
-      agent.pathIndex++;
-      if (agent.pathIndex >= agent.path.length) {
-        agent.state = 'resting';
-        agent.restTicks = Math.floor(Math.random() * 250) + 150; // Rest for 9-24 seconds (60ms ticks)
-        agent.roomTargetLatLng = null;
-        agent.pauseTicks = 0;
-      } else {
-        agent.latlng = agent.path[agent.pathIndex];
-      }
-    } else if (agent.state === 'resting') {
-      agent.restTicks--;
-      if (agent.restTicks <= 0) {
-        const currentRoom = savedRooms.find(r => r.id === agent.destRoomId);
-        if (currentRoom && roomsWithDoors.length > 1) {
-          let destRoom = selectDestinationRoomBySchedule(roomsWithDoors, simulatedHour);
-          while (destRoom.id === currentRoom.id && roomsWithDoors.length > 1) {
-            destRoom = selectDestinationRoomBySchedule(roomsWithDoors, simulatedHour);
-          }
-          
-          const rawPath = runPathfindingOnFloor(currentRoom, destRoom, activeFloor);
-          if (rawPath) {
-            const currentDoors = savedDoors.filter(d => d.roomId === currentRoom.id && d.floor === activeFloor);
-            const destDoors = savedDoors.filter(d => d.roomId === destRoom.id && d.floor === activeFloor);
-            
-            if (currentDoors.length > 0 && destDoors.length > 0) {
-              const startDoor = currentDoors[0].latlng;
-              const endDoor = destDoors[0].latlng;
-              
-              const spawnLatLng = agent.latlng;
-              const destLatLng = getRandomPointInRoom(destRoom);
-              
-              const roomEnterPath = interpolateTwoPoints(spawnLatLng, startDoor, 5);
-              const hallwayPath = interpolatePath(rawPath, 5);
-              const roomExitPath = interpolateTwoPoints(endDoor, destLatLng, 5);
-              
-              agent.path = [...roomEnterPath, ...hallwayPath, ...roomExitPath];
-              agent.pathIndex = 0;
-              agent.latlng = agent.path[0];
-              agent.state = 'walking';
-              agent.startRoomId = currentRoom.id;
-              agent.destRoomId = destRoom.id;
-            }
-          }
-        }
-      } else {
-        // Mosey/mill around inside the room
-        const currentRoom = savedRooms.find(r => r.id === agent.destRoomId);
-        if (currentRoom) {
-          // If room attractiveness is low at this hour, give agent a small chance to leave early
-          const currentWeight = getCategoryWeight(currentRoom.category, simulatedHour);
-          if (currentWeight < 0.25 && Math.random() < 0.015) {
-            agent.restTicks = 0; 
-          }
-          
-          if (agent.pauseTicks > 0) {
-            agent.pauseTicks--;
-          } else {
-            if (!agent.roomTargetLatLng) {
-              if (Math.random() < 0.15) {
-                agent.pauseTicks = Math.floor(Math.random() * 40) + 15; // Pause for 1-3 seconds
-              } else {
-                agent.roomTargetLatLng = getRandomPointInRoom(currentRoom);
-              }
-            }
-            
-            if (agent.roomTargetLatLng) {
-              // Walk towards room target coordinate
-              const stepSize = 0.000003 + Math.random() * 0.000002;
-              const result = moveTowards(agent.latlng, agent.roomTargetLatLng, stepSize);
-              agent.latlng = result.pos;
-              if (result.reached) {
-                agent.roomTargetLatLng = null;
-              }
-            }
-          }
-        }
-      }
-    }
-  });
-  
-  // Calculate occupancies based on active agent coordinates (with offsets)
-  const occupancy = {};
-  roomsOnFloor.forEach(r => occupancy[r.id] = 0);
-  
-  simulatedAgents.forEach(agent => {
-    if (agent.floor !== activeFloor) return;
-    const actualPt = [agent.latlng[0] + agent.offsetLat, agent.latlng[1] + agent.offsetLng];
-    
-    let foundRoom = false;
-    for (const r of roomsOnFloor) {
-      if (isPointInPolygon(actualPt, r.latlngs)) {
-        occupancy[r.id] = (occupancy[r.id] || 0) + 1;
-        foundRoom = true;
-        break;
-      }
-    }
-    if (!foundRoom && agent.state === 'resting') {
-      occupancy[agent.destRoomId] = (occupancy[agent.destRoomId] || 0) + 1;
-    }
-  });
-  
-  // Cache globally for UI updates
-  roomOccupancies = occupancy;
-  
-  // Update UI badges
-  roomsOnFloor.forEach(room => {
-    const count = occupancy[room.id] || 0;
-    const badge = document.getElementById(`occupancy-badge-${room.id}`);
-    if (badge) {
-      badge.innerHTML = `<i class="fa-solid fa-users"></i> ${count}`;
-      if (count > 10) {
-        badge.className = 'room-dir-occupants crowded';
-      } else {
-        badge.className = 'room-dir-occupants';
-      }
-    }
-  });
-}
-
-function stopCrowdSimulation(resetClock = true) {
-  if (agentUpdateIntervalId) {
-    clearInterval(agentUpdateIntervalId);
-    agentUpdateIntervalId = null;
-  }
-  simulatedAgents = [];
-  roomOccupancies = {};
-  
-  if (resetClock) {
-    simulatedHour = 10;
-    if (simTimeSlider) simTimeSlider.value = 10;
-    if (simTimeDisplay) simTimeDisplay.textContent = formatHour(10);
-    if (simTimeDesc) simTimeDesc.textContent = getTimeOfDayDescription(10);
-  }
-  
-  // Reset directory badges
-  savedRooms.forEach(room => {
-    const badge = document.getElementById(`occupancy-badge-${room.id}`);
-    if (badge) {
-      badge.innerHTML = `<i class="fa-solid fa-users"></i> 0`;
-      badge.className = 'room-dir-occupants';
-    }
-  });
-}
-
-// --- WebSocket Real-Time Tracking Core ---
-function updateWsStatus(status) {
-  if (!liveConnectionStatus) return;
-  
-  // Remove existing status classes
-  liveConnectionStatus.classList.remove('disconnected', 'connecting', 'connected');
+function updateWifiWsStatus(status) {
+  if (!wifiConnectionStatus) return;
+  wifiConnectionStatus.className = 'ws-status-badge ' + status;
   
   if (status === 'disconnected') {
-    liveConnectionStatus.classList.add('disconnected');
-    liveConnectionStatus.innerHTML = '<span class="status-dot"></span> Disconnected';
-    if (btnToggleLiveConn) {
-      btnToggleLiveConn.textContent = 'Connect';
-      btnToggleLiveConn.classList.remove('danger');
-      btnToggleLiveConn.classList.add('primary');
-    }
+    wifiConnectionStatus.innerHTML = '<span class="status-dot"></span> Disconnected';
   } else if (status === 'connecting') {
-    liveConnectionStatus.classList.add('connecting');
-    liveConnectionStatus.innerHTML = '<span class="status-dot"></span> Connecting';
-    if (btnToggleLiveConn) {
-      btnToggleLiveConn.textContent = 'Cancel';
-      btnToggleLiveConn.classList.remove('primary');
-      btnToggleLiveConn.classList.add('danger');
-    }
+    wifiConnectionStatus.innerHTML = '<span class="status-dot"></span> Connecting';
   } else if (status === 'connected') {
-    liveConnectionStatus.classList.add('connected');
-    liveConnectionStatus.innerHTML = '<span class="status-dot"></span> Connected';
-    if (btnToggleLiveConn) {
-      btnToggleLiveConn.textContent = 'Disconnect';
-      btnToggleLiveConn.classList.remove('primary');
-      btnToggleLiveConn.classList.add('danger');
-    }
+    wifiConnectionStatus.innerHTML = '<span class="status-dot"></span> Connected';
   }
 }
 
-function connectToLiveWS() {
-  if (liveWebSocket) {
-    disconnectLiveWS();
+function connectToWifiWS() {
+  if (wifiWebSocket) {
+    disconnectWifiWS();
   }
   
-  const url = (liveWsUrlInput ? liveWsUrlInput.value.trim() : '') || 'ws://localhost:8080';
-  liveWsUrl = url;
-  
-  showToast(`Connecting to ${url}...`);
-  updateWsStatus('connecting');
+  updateWifiWsStatus('connecting');
   
   try {
-    liveWebSocket = new WebSocket(url);
+    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsHost = window.location.hostname;
+    const wsUrl = `${wsProtocol}//${wsHost}:8080`;
     
-    liveWebSocket.onopen = () => {
-      showToast('Connected to DensePose tracking server!');
-      updateWsStatus('connected');
+    wifiWebSocket = new WebSocket(wsUrl);
+    
+    wifiWebSocket.onopen = () => {
+      showToast('Connected to WiFi Network Scanner!');
+      updateWifiWsStatus('connected');
     };
     
-    liveWebSocket.onmessage = (event) => {
-      if (!isCrowdAnalyticsEnabled || activeTrafficSource !== 'live') return;
+    wifiWebSocket.onmessage = (event) => {
+      if (!isWifiScannerEnabled) return;
       
       try {
         const message = JSON.parse(event.data);
         
-        if (message.type === 'heatmap') {
-          // message.points = [[lat, lng], [lat, lng, weight], ...]
-          const points = message.points.map(pt => {
-            return [pt[0], pt[1], pt[2] || 1.2];
-          });
+        if (message.type === 'wifi-heatmap') {
+          // Determine local center (where active floor plan boundary or rooms are)
+          const activeBoundary = savedBoundaries.find(b => b.floor === activeFloor);
+          let centerLat = currentGpsCoords.lat;
+          let centerLng = currentGpsCoords.lng;
+
+          if (activeBoundary && activeBoundary.latlngs && activeBoundary.latlngs.length > 0) {
+            let sumLat = 0, sumLng = 0;
+            activeBoundary.latlngs.forEach(pt => {
+              sumLat += pt[0];
+              sumLng += pt[1];
+            });
+            centerLat = sumLat / activeBoundary.latlngs.length;
+            centerLng = sumLng / activeBoundary.latlngs.length;
+          } else {
+            const roomsOnFloor = savedRooms.filter(r => r.floor === activeFloor);
+            if (roomsOnFloor.length > 0) {
+              let sumLat = 0, sumLng = 0, count = 0;
+              roomsOnFloor.forEach(r => {
+                r.latlngs.forEach(pt => {
+                  sumLat += pt[0];
+                  sumLng += pt[1];
+                  count++;
+                });
+              });
+              if (count > 0) {
+                centerLat = sumLat / count;
+                centerLng = sumLng / count;
+              }
+            }
+          }
+
+          // Shifting offset from Googleplex (37.4220, -122.0841) to local active layout center
+          const refLat = 37.4220;
+          const refLng = -122.0841;
+
+          // Adjust device coordinates for list display
+          if (message.devices) {
+            message.devices.forEach(device => {
+              const dLat = device.lat - refLat;
+              const dLng = device.lng - refLng;
+              device.lat = centerLat + dLat;
+              device.lng = centerLng + dLng;
+            });
+          }
+
+          // Adjust heatmap points coordinates
+          if (message.points) {
+            message.points = message.points.map(pt => {
+              const dLat = pt[0] - refLat;
+              const dLng = pt[1] - refLng;
+              return [centerLat + dLat, centerLng + dLng, pt[2]];
+            });
+          }
+
+          // Render heatmap coordinates
+          if (heatmapLayer && message.points) {
+            heatmapLayer.setLatLngs(message.points);
+          }
           
-          // Re-calculate room occupancy client-side based on these coordinates
-          calculateLiveOccupancies(points);
-        } else if (message.type === 'occupancy') {
-          // Direct room occupancy updates from server
-          roomOccupancies = message.occupancy;
-          updateRoomDirectoryUI();
+          // Update Devices directory UI
+          updateWifiDevicesUI(message.devices);
         }
       } catch (err) {
         console.error('Error parsing WebSocket message:', err);
       }
     };
     
-    liveWebSocket.onerror = (error) => {
+    wifiWebSocket.onerror = (error) => {
       console.error('WebSocket error:', error);
-      showToast('Connection error. Check console / server.');
-      updateWsStatus('disconnected');
+      showToast('WiFi scanner server connection error.');
+      updateWifiWsStatus('disconnected');
     };
     
-    liveWebSocket.onclose = () => {
-      showToast('Disconnected from tracking server.');
-      updateWsStatus('disconnected');
-      liveWebSocket = null;
+    wifiWebSocket.onclose = () => {
+      showToast('Disconnected from WiFi scanner server.');
+      updateWifiWsStatus('disconnected');
+      wifiWebSocket = null;
     };
-    
   } catch (err) {
     console.error('WebSocket initialization error:', err);
-    showToast('Failed to connect.');
-    updateWsStatus('disconnected');
+    updateWifiWsStatus('disconnected');
   }
 }
 
-function disconnectLiveWS() {
-  if (liveWebSocket) {
-    liveWebSocket.close();
-    liveWebSocket = null;
+function disconnectWifiWS() {
+  if (wifiWebSocket) {
+    wifiWebSocket.close();
+    wifiWebSocket = null;
   }
-  updateWsStatus('disconnected');
+  updateWifiWsStatus('disconnected');
+  
+  if (wifiDevicesList) {
+    wifiDevicesList.innerHTML = '<div style="font-size: 0.65rem; color: var(--text-muted); text-align: center; padding: 10px;">Waiting for scanner connection...</div>';
+  }
+  if (wifiDeviceCount) {
+    wifiDeviceCount.textContent = '0 Devices';
+  }
 }
 
-// Calculates room occupancy client-side based on live coordinate list
-function calculateLiveOccupancies(points) {
-  const roomsOnFloor = savedRooms.filter(r => r.floor === activeFloor);
-  const occupancy = {};
-  roomsOnFloor.forEach(r => occupancy[r.id] = 0);
+function updateWifiDevicesUI(devices) {
+  if (!wifiDevicesList) return;
+  wifiDevicesList.innerHTML = '';
   
-  points.forEach(pt => {
-    for (const r of roomsOnFloor) {
-      if (isPointInPolygon([pt[0], pt[1]], r.latlngs)) {
-        occupancy[r.id] = (occupancy[r.id] || 0) + 1;
-        break;
-      }
-    }
-  });
+  if (wifiDeviceCount) {
+    wifiDeviceCount.textContent = `${devices.length} Devices`;
+  }
   
-  roomOccupancies = occupancy;
+  if (devices.length === 0) {
+    wifiDevicesList.innerHTML = '<div style="font-size: 0.65rem; color: var(--text-muted); text-align: center; padding: 10px;">Scanning network subnet... No active devices found.</div>';
+    return;
+  }
   
-  // Update UI badges
-  roomsOnFloor.forEach(room => {
-    const count = occupancy[room.id] || 0;
-    const badge = document.getElementById(`occupancy-badge-${room.id}`);
-    if (badge) {
-      badge.innerHTML = `<i class="fa-solid fa-users"></i> ${count}`;
-      if (count > 10) {
-        badge.className = 'room-dir-occupants crowded';
-      } else {
-        badge.className = 'room-dir-occupants';
-      }
-    }
+  devices.forEach(device => {
+    const card = document.createElement('div');
+    card.className = 'wifi-device-card';
+    
+    const avgRssi = Math.round(device.rssi.reduce((a, b) => a + b, 0) / device.rssi.length);
+    
+    card.innerHTML = `
+      <div class="wifi-device-meta">
+        <span class="wifi-device-ip"><i class="fa-solid fa-laptop"></i> ${device.ip}</span>
+        <span class="wifi-device-mac">${device.mac}</span>
+      </div>
+      <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.6rem; margin-top: 2px;">
+        <span style="color: var(--text-muted);">Triangulated Est: ${device.lat.toFixed(6)}, ${device.lng.toFixed(6)}</span>
+        <span class="wifi-signal-pill">${avgRssi} dBm</span>
+      </div>
+    `;
+    wifiDevicesList.appendChild(card);
   });
 }
+
+
 

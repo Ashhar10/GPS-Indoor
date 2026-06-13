@@ -104,65 +104,41 @@
               <i class="fa-solid fa-arrows-spin"></i> Reset
             </button>
           </div>
-          <div style="border-top: 1px solid var(--border-color); margin-top: 8px; padding-top: 8px;">
-            <label class="checkbox-container" style="margin-bottom: 0;">
-              <input type="checkbox" id="toggle-crowd-analytics">
-              <span class="checkmark"></span>
-              <i class="fa-solid fa-users" style="color: var(--warning);"></i> Enable Crowd Analytics
-            </label>
-            <!-- Traffic Crowd Analytics Configuration HUD -->
-            <div id="crowd-config-hud" style="display: none; margin-top: 10px; flex-direction: column; gap: 8px; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 8px;">
-              <!-- Source Selector (Simulation vs Live DensePose) -->
-              <div class="source-toggle-container">
-                <button class="source-btn active" id="source-btn-simulation" data-source="simulation" type="button">
-                  <i class="fa-solid fa-laptop-code"></i> Simulation
-                </button>
-                <button class="source-btn" id="source-btn-live" data-source="live" type="button">
-                  <i class="fa-solid fa-camera"></i> Live (DensePose)
-                </button>
-              </div>
+        </div>
+      </div>
 
-              <!-- Simulated Time Slider HUD (shown when simulation is selected) -->
-              <div id="heatmap-time-control" style="display: flex; flex-direction: column; gap: 6px;">
-                <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.75rem;">
-                  <span style="color: var(--text-secondary); font-weight: 500;">Simulated Time:</span>
-                  <strong id="sim-time-display" style="color: var(--warning);">10:00 AM</strong>
-                </div>
-                <input type="range" id="sim-time-slider" min="0" max="23" value="10" style="width: 100%; accent-color: var(--warning); cursor: pointer; margin-top: 2px;">
-                <div style="display: flex; justify-content: space-between; font-size: 0.6rem; color: var(--text-muted); padding: 0 2px;">
-                  <span>12 AM</span>
-                  <span>8 AM</span>
-                  <span>12 PM</span>
-                  <span>4 PM</span>
-                  <span>8 PM</span>
-                </div>
-                <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border-color); border-radius: 6px; padding: 6px; font-size: 0.65rem; color: var(--text-secondary); margin-top: 4px; line-height: 1.35; display: flex; gap: 6px; align-items: flex-start;">
-                  <i class="fa-regular fa-clock" style="color: var(--warning); font-size: 0.75rem; margin-top: 1px;"></i>
-                  <span id="sim-time-desc">Morning Rush: Classrooms and faculty offices highly active.</span>
-                </div>
-              </div>
 
-              <!-- Live DensePose Connection HUD (shown when live is selected) -->
-              <div id="heatmap-live-control" style="display: none; flex-direction: column; gap: 8px;">
-                <div style="display: flex; align-items: center; justify-content: space-between; font-size: 0.75rem;">
-                  <span style="color: var(--text-secondary); font-weight: 500;">Server Status:</span>
-                  <span id="live-connection-status" class="ws-status-badge disconnected">
-                    <span class="status-dot"></span> Disconnected
-                  </span>
-                </div>
-                <div style="display: flex; gap: 6px; align-items: center;">
-                  <input type="text" id="live-ws-url-input" value="ws://localhost:8080" placeholder="ws://localhost:8080" style="flex: 1; background: var(--bg-input); border: 1px solid var(--border-color); color: var(--text-primary); padding: 6px 8px; border-radius: 6px; font-size: 0.75rem; outline: none; font-family: inherit;">
-                  <button class="btn-action primary" id="btn-toggle-live-conn" style="padding: 6px 12px; font-size: 0.75rem; font-weight: 600; white-space: nowrap;" type="button">Connect</button>
-                </div>
-                <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border-color); border-radius: 6px; padding: 6px; font-size: 0.65rem; color: var(--text-secondary); line-height: 1.35; display: flex; gap: 6px; align-items: flex-start;">
-                  <i class="fa-solid fa-circle-info" style="color: var(--accent-color); font-size: 0.75rem; margin-top: 1px;"></i>
-                  <span>Enter the WebSocket address of your DensePose bridge server to stream actual indoor positions.</span>
-                </div>
-              </div>
-            </div>
+      <!-- Section 4: WiFi Subnet Device Scanner -->
+      <div class="panel-section" style="display: flex; flex-direction: column; gap: 8px;">
+        <h3>WiFi Subnet Device Scanner</h3>
+        <p class="section-desc">Track and triangulate dynamic devices connected to your LAN/WiFi network.</p>
+        <label class="checkbox-container">
+          <input type="checkbox" id="toggle-wifi-scanner">
+          <span class="checkmark"></span>
+          <i class="fa-solid fa-wifi" style="color: #60a5fa;"></i> Enable Subnet Scanner
+        </label>
+        
+        <!-- Live Wifi Scan HUD -->
+        <div id="wifi-scan-hud" style="display: none; flex-direction: column; gap: 8px; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 8px;">
+          <div style="display: flex; align-items: center; justify-content: space-between; font-size: 0.75rem;">
+            <span style="color: var(--text-secondary); font-weight: 500;">Scanner Status:</span>
+            <span id="wifi-connection-status" class="ws-status-badge disconnected">
+              <span class="status-dot"></span> Disconnected
+            </span>
+          </div>
+          
+          <div style="font-size: 0.75rem; color: var(--text-secondary); font-weight: 600; margin-top: 4px; display: flex; align-items: center; justify-content: space-between;">
+            <span>Connected Devices:</span>
+            <span id="wifi-device-count" style="color: #60a5fa; font-weight: 700;">0 Devices</span>
+          </div>
+
+          <!-- Scrollable Connected WiFi Devices List -->
+          <div class="wifi-devices-list" id="wifi-devices-list" style="max-height: 150px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; margin-top: 4px; padding-right: 4px;">
+            <div style="font-size: 0.65rem; color: var(--text-muted); text-align: center; padding: 10px;">Waiting for scanner connection...</div>
           </div>
         </div>
       </div>
+
 
       <!-- Section 4: Saved Rooms List -->
       <div class="panel-section" style="flex: 1; display: flex; flex-direction: column; overflow: hidden;">
@@ -276,6 +252,8 @@
 
   <!-- Leaflet JS -->
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <!-- Leaflet Heatmap Plugin -->
+  <script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
 
   <!-- App JS -->
   <script src="app.js"></script>

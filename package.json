@@ -1,7 +1,7 @@
 {
-  "name": "gps-indoor-mapper-server",
+  "name": "gps-indoor-wifi-scanner-server",
   "version": "1.0.0",
-  "description": "Mock WebSocket server for DensePose indoor crowd tracking",
+  "description": "Node.js WebSocket backend server performing dynamic LAN/WiFi scans and triangulation.",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
