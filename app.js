@@ -69,6 +69,11 @@ let threeControls = null;
 let threeAnimationFrame = null;
 let threeSceneRoot = null;
 
+// Google Maps 3D state
+let googleMap3D = null;
+let googleMap3DMode = 'three'; // 'three' (fallback) or 'google'
+let google3DOverlays = []; // { polygons, polylines, markers, fitBounds }
+
 // --- DOM Elements ---
 const btnFindMe = document.getElementById('btn-find-me');
 const btnStyleDark = document.getElementById('btn-style-dark');
@@ -103,6 +108,8 @@ const viewer3DStage = document.getElementById('viewer3d-stage');
 const viewer3DSubtitle = document.getElementById('viewer3d-subtitle');
 const viewer3DFloorPill = document.getElementById('viewer3d-floor-pill');
 const btnClose3D = document.getElementById('btn-close-3d');
+const googleMapsApiKeyInput = document.getElementById('google-maps-api-key');
+const btnApplyGoogleKey = document.getElementById('btn-apply-google-key');
 
 // Navigation Elements
 const navStartSelect = document.getElementById('nav-start');
@@ -385,6 +392,12 @@ function setupUIEventListeners() {
   btnFindMe.addEventListener('click', () => locateUser(false));
   if (btnOpen3D) btnOpen3D.addEventListener('click', open3DView);
   if (btnClose3D) btnClose3D.addEventListener('click', close3DView);
+  if (btnApplyGoogleKey) btnApplyGoogleKey.addEventListener('click', applyGoogleMapsKey);
+  if (googleMapsApiKeyInput) {
+    googleMapsApiKeyInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') applyGoogleMapsKey();
+    });
+  }
   if (viewer3DOverlay) {
     viewer3DOverlay.addEventListener('click', (e) => {
       if (e.target === viewer3DOverlay) close3DView();
@@ -2081,21 +2094,44 @@ function updateWifiDevicesUI(devices, type, customMessage) {
 
 function request3DRefresh() {
   if (viewer3DOverlay && viewer3DOverlay.classList.contains('show')) {
-    render3DScene();
+    if (googleMap3DMode === 'google' && googleMap3D) {
+      renderGoogle3DOverlays();
+    } else {
+      render3DScene();
+    }
   }
 }
 
 function open3DView() {
-  if (!window.THREE || !viewer3DOverlay || !viewer3DStage) {
+  if (!viewer3DOverlay || !viewer3DStage) {
     showToast('3D viewer could not be loaded.');
     return;
   }
 
   viewer3DOverlay.classList.add('show');
-  ensure3DViewer();
-  render3DScene();
-  handle3DResize();
-  start3DAnimation();
+
+  const savedKey = (localStorage.getItem('mazemap_google_maps_api_key') || '').trim();
+  if (googleMapsApiKeyInput && !googleMapsApiKeyInput.value && savedKey) {
+    googleMapsApiKeyInput.value = savedKey;
+  }
+
+  if (savedKey) {
+    loadGoogle3DMap(savedKey).catch(err => {
+      console.error('Google 3D load error:', err);
+      googleMap3DMode = 'three';
+      ensure3DViewer();
+      render3DScene();
+      handle3DResize();
+      start3DAnimation();
+      showToast('Google 3D failed to load, using local 3D fallback.');
+    });
+  } else {
+    googleMap3DMode = 'three';
+    ensure3DViewer();
+    render3DScene();
+    handle3DResize();
+    start3DAnimation();
+  }
 }
 
 function close3DView() {
@@ -2103,6 +2139,94 @@ function close3DView() {
     viewer3DOverlay.classList.remove('show');
   }
   stop3DAnimation();
+}
+
+function applyGoogleMapsKey() {
+  if (!googleMapsApiKeyInput) return;
+  const key = googleMapsApiKeyInput.value.trim();
+  if (!key) {
+    showToast('Please paste your Google Maps Demo Key first.');
+    return;
+  }
+  localStorage.setItem('mazemap_google_maps_api_key', key);
+  showToast('Loading real Google Maps 3D...');
+  loadGoogle3DMap(key).catch(err => {
+    console.error('Google 3D load error:', err);
+    showToast('Invalid key or network error. Using local 3D fallback.');
+    googleMap3DMode = 'three';
+    ensure3DViewer();
+    render3DScene();
+    handle3DResize();
+    start3DAnimation();
+  });
+}
+
+function loadGoogle3DMap(apiKey) {
+  return new Promise((resolve, reject) => {
+    if (window.google && window.google.maps) {
+      initGoogle3DMap(apiKey);
+      return resolve();
+    }
+
+    const existingScript = document.getElementById('google-maps-js-api');
+    if (existingScript) {
+      existingScript.remove();
+    }
+
+    const script = document.createElement('script');
+    script.id = 'google-maps-js-api';
+    script.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(apiKey)}&v=weekly&libraries=maps`;
+    script.async = true;
+    script.defer = true;
+    script.onload = () => {
+      try {
+        initGoogle3DMap(apiKey);
+        resolve();
+      } catch (err) {
+        reject(err);
+      }
+    };
+    script.onerror = () => reject(new Error('Failed to load Google Maps JS API'));
+    document.head.appendChild(script);
+  });
+}
+
+function initGoogle3DMap(apiKey) {
+  if (!window.google || !window.google.maps) return;
+
+  googleMap3DMode = 'google';
+  stop3DAnimation();
+  clearThree3DViewer();
+  if (viewer3DStage) viewer3DStage.innerHTML = '';
+
+  const center = { lat: currentGpsCoords.lat, lng: currentGpsCoords.lng };
+  const map = new google.maps.Map(viewer3DStage, {
+    center,
+    zoom: 19,
+    tilt: 67.5,
+    heading: 0,
+    mapId: 'DEMO_MAP_ID',
+    disableDefaultUI: true,
+    clickableIcons: false
+  });
+
+  googleMap3D = map;
+  renderGoogle3DOverlays();
+
+  if (viewer3DSubtitle) viewer3DSubtitle.textContent = 'Real Google Maps 3D view with your mapped overlays.';
+  showToast('Google Maps 3D loaded.');
+}
+
+function clearThree3DViewer() {
+  stop3DAnimation();
+  if (threeSceneRoot) {
+    clear3DSceneRoot();
+  }
+  threeRenderer = null;
+  threeScene = null;
+  threeCamera = null;
+  threeControls = null;
+  threeSceneRoot = null;
 }
 
 function ensure3DViewer() {
@@ -2447,6 +2571,145 @@ function getRoomColor(category) {
   };
 
   return colors[category] || 0x6366f1;
+}
+
+// ─── Google Maps 3D Overlay Rendering ─────────────────────────────────
+function renderGoogle3DOverlays() {
+  if (!googleMap3D || !window.google || !window.google.maps) return;
+  clearGoogle3DOverlays();
+
+  const rooms = savedRooms.filter(r => r.floor === activeFloor);
+  const walls = savedWalls.filter(w => w.floor === activeFloor);
+  const windowsOnFloor = savedWindows.filter(w => w.floor === activeFloor);
+  const doors = savedDoors.filter(d => d.floor === activeFloor);
+  const boundary = savedBoundaries.find(b => b.floor === activeFloor) || null;
+
+  if (viewer3DFloorPill) viewer3DFloorPill.textContent = `Floor ${activeFloor}`;
+  if (viewer3DSubtitle) viewer3DSubtitle.textContent = `${rooms.length} rooms, ${walls.length} walls, ${doors.length} doors on the active floor (Google 3D).`;
+
+  const bounds = new google.maps.LatLngBounds();
+
+  if (boundary && boundary.latlngs.length >= 3) {
+    boundary.latlngs.forEach(p => bounds.extend({ lat: p[0], lng: p[1] }));
+    const poly = new google.maps.Polygon({
+      paths: boundary.latlngs.map(p => ({ lat: p[0], lng: p[1] })),
+      strokeColor: '#f59e0b',
+      strokeOpacity: 0.9,
+      strokeWeight: 3,
+      fillColor: '#f59e0b',
+      fillOpacity: 0.08,
+      map: googleMap3D
+    });
+    google3DOverlays.push({ kind: 'polygon', handle: poly });
+  }
+
+  rooms.forEach(room => {
+    const path = room.latlngs.map(p => ({ lat: p[0], lng: p[1] }));
+    path.forEach(p => bounds.extend(p));
+
+    const poly = new google.maps.Polygon({
+      paths: path,
+      strokeColor: room.id === activeRoomId ? '#ffffff' : '#93c5fd',
+      strokeOpacity: 0.95,
+      strokeWeight: room.id === activeRoomId ? 4 : 2,
+      fillColor: colorToHexString(getRoomColor(room.category)),
+      fillOpacity: 0.45,
+      map: googleMap3D
+    });
+    google3DOverlays.push({ kind: 'polygon', handle: poly });
+
+    const label = new google.maps.Marker({
+      position: polygonCentroid(path),
+      map: googleMap3D,
+      label: {
+        text: room.name || 'Room',
+        color: '#0f172a',
+        fontSize: '11px',
+        fontWeight: '600'
+      },
+      icon: {
+        path: 'M 0,0 L 0,0',
+        fillOpacity: 0,
+        strokeOpacity: 0
+      }
+    });
+    google3DOverlays.push({ kind: 'marker', handle: label });
+  });
+
+  walls.forEach(w => drawPolyline3D(w.latlngs, '#475569', 4, bounds));
+  windowsOnFloor.forEach(w => drawPolyline3D(w.latlngs, '#67e8f9', 3, bounds));
+  doors.forEach(door => {
+    if (!door.latlng) return;
+    const p = { lat: door.latlng[0], lng: door.latlng[1] };
+    bounds.extend(p);
+    const marker = new google.maps.Marker({
+      position: p,
+      map: googleMap3D,
+      icon: {
+        path: google.maps.SymbolPath.CIRCLE,
+        scale: 5,
+        fillColor: '#10b981',
+        fillOpacity: 0.95,
+        strokeColor: '#ffffff',
+        strokeWeight: 1.5
+      }
+    });
+    google3DOverlays.push({ kind: 'marker', handle: marker });
+  });
+
+  const userMarker = new google.maps.Marker({
+    position: { lat: currentGpsCoords.lat, lng: currentGpsCoords.lng },
+    map: googleMap3D,
+    icon: {
+      path: google.maps.SymbolPath.CIRCLE,
+      scale: 7,
+      fillColor: '#3b82f6',
+      fillOpacity: 0.9,
+      strokeColor: '#ffffff',
+      strokeWeight: 2
+    }
+  });
+  google3DOverlays.push({ kind: 'marker', handle: userMarker });
+  bounds.extend({ lat: currentGpsCoords.lat, lng: currentGpsCoords.lng });
+
+  if (!bounds.isEmpty()) {
+    googleMap3D.fitBounds(bounds, 60);
+  }
+}
+
+function drawPolyline3D(latlngs, color, weight, bounds) {
+  if (!latlngs || latlngs.length < 2) return;
+  const path = latlngs.map(p => ({ lat: p[0], lng: p[1] }));
+  path.forEach(p => bounds && bounds.extend(p));
+  const line = new google.maps.Polyline({
+    path,
+    geodesic: true,
+    strokeColor: color,
+    strokeOpacity: 0.95,
+    strokeWeight: weight,
+    map: googleMap3D
+  });
+  google3DOverlays.push({ kind: 'polyline', handle: line });
+}
+
+function clearGoogle3DOverlays() {
+  google3DOverlays.forEach(entry => {
+    if (entry.handle && entry.handle.setMap) {
+      entry.handle.setMap(null);
+    }
+  });
+  google3DOverlays = [];
+}
+
+function colorToHexString(hex) {
+  return '#' + hex.toString(16).padStart(6, '0');
+}
+
+function polygonCentroid(path) {
+  if (!path || path.length === 0) return { lat: 0, lng: 0 };
+  let lat = 0, lng = 0;
+  path.forEach(p => { lat += p.lat; lng += p.lng; });
+  return { lat: lat / path.length, lng: lng / path.length };
 }
 
 

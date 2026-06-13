@@ -685,6 +685,62 @@ body {
   color: var(--text-secondary);
 }
 
+.viewer3d-key-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 18px;
+  background: rgba(15, 23, 42, 0.85);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.viewer3d-key-bar i {
+  color: var(--accent-color);
+  font-size: 0.95rem;
+}
+
+.viewer3d-key-bar input {
+  flex: 1;
+  background: var(--bg-input);
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 0.8rem;
+  font-family: monospace;
+  outline: none;
+  min-width: 0;
+}
+
+.viewer3d-key-bar input:focus {
+  border-color: var(--accent-color);
+}
+
+.viewer3d-key-bar #btn-apply-google-key {
+  font-size: 0.75rem;
+  padding: 8px 14px;
+  white-space: nowrap;
+}
+
+.viewer3d-key-bar a {
+  color: var(--text-secondary);
+  text-decoration: none;
+  font-size: 1rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 1px solid var(--border-color);
+  transition: all 0.2s ease;
+}
+
+.viewer3d-key-bar a:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
 .viewer3d-footer {
   border-bottom: none;
   border-top: 1px solid var(--border-color);

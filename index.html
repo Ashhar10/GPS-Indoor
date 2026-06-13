@@ -275,9 +275,17 @@
           <i class="fa-solid fa-xmark"></i>
         </button>
       </div>
+      <div class="viewer3d-key-bar">
+        <i class="fa-solid fa-key"></i>
+        <input type="text" id="google-maps-api-key" placeholder="Paste your Google Maps Demo Key (no billing required)" autocomplete="off" />
+        <button class="btn-action primary" id="btn-apply-google-key" type="button">Load 3D</button>
+        <a id="google-maps-help" href="https://developers.google.com/maps/documentation/javascript/demo-key" target="_blank" rel="noopener" title="How to get a free Demo Key">
+          <i class="fa-solid fa-circle-question"></i>
+        </a>
+      </div>
       <div class="viewer3d-stage" id="viewer3d-stage"></div>
       <div class="viewer3d-footer">
-        <span>Drag to orbit, scroll to zoom, right-drag to pan.</span>
+        <span>Right-drag to pan, scroll to zoom. 3D photo look uses Google Maps Demo Key.</span>
         <span id="viewer3d-floor-pill">Floor 1</span>
       </div>
     </div>
@@ -292,8 +300,8 @@
   <!-- Leaflet JS -->
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
   <!-- Leaflet Heatmap Plugin -->
-  <script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
-  <!-- Three.js -->
+  <script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet.heat.js"></script>
+  <!-- Three.js (used for the local 3D fallback when no Google key is provided) -->
   <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/examples/js/controls/OrbitControls.js"></script>
 
