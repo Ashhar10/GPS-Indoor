@@ -35,6 +35,8 @@ let activeFloor = '1';
 let isWifiScannerEnabled = false;
 let wifiWebSocket = null;
 let wifiHeatmapPoints = [];
+let lastWifiScannerMessage = null;
+let activeSubnetFilter = 'all';
 
 
 
@@ -97,6 +99,7 @@ const checkboxWifiScanner = document.getElementById('toggle-wifi-scanner');
 const wifiScanHud = document.getElementById('wifi-scan-hud');
 const wifiConnectionStatus = document.getElementById('wifi-connection-status');
 const wifiScannerIpInput = document.getElementById('wifi-scanner-ip');
+const wifiNetworkFilter = document.getElementById('wifi-network-filter');
 const wifiDeviceCount = document.getElementById('wifi-device-count');
 const wifiDevicesList = document.getElementById('wifi-devices-list');
 
@@ -498,6 +501,23 @@ function setupUIEventListeners() {
       showToast('Scanner address updated. Reconnecting...');
       if (isWifiScannerEnabled) {
         connectToWifiWS();
+      }
+    });
+  }
+
+  // WiFi Scanner Subnet Dropdown Filter
+  if (wifiNetworkFilter) {
+    const savedFilter = localStorage.getItem('mazemap_wifi_subnet_filter');
+    if (savedFilter) {
+      activeSubnetFilter = savedFilter;
+      wifiNetworkFilter.value = savedFilter;
+    }
+    wifiNetworkFilter.addEventListener('change', (e) => {
+      activeSubnetFilter = e.target.value;
+      localStorage.setItem('mazemap_wifi_subnet_filter', activeSubnetFilter);
+      showToast(`Filtering to: ${e.target.options[e.target.selectedIndex].text}`);
+      if (lastWifiScannerMessage) {
+        processWifiScannerMessage(lastWifiScannerMessage);
       }
     });
   }
@@ -1607,73 +1627,9 @@ function connectToWifiWS() {
     
     wifiWebSocket.onmessage = (event) => {
       if (!isWifiScannerEnabled) return;
-      
       try {
         const message = JSON.parse(event.data);
-        
-        if (message.type === 'wifi-heatmap') {
-          // Determine local center (where active floor plan boundary or rooms are)
-          const activeBoundary = savedBoundaries.find(b => b.floor === activeFloor);
-          let centerLat = currentGpsCoords.lat;
-          let centerLng = currentGpsCoords.lng;
-
-          if (activeBoundary && activeBoundary.latlngs && activeBoundary.latlngs.length > 0) {
-            let sumLat = 0, sumLng = 0;
-            activeBoundary.latlngs.forEach(pt => {
-              sumLat += pt[0];
-              sumLng += pt[1];
-            });
-            centerLat = sumLat / activeBoundary.latlngs.length;
-            centerLng = sumLng / activeBoundary.latlngs.length;
-          } else {
-            const roomsOnFloor = savedRooms.filter(r => r.floor === activeFloor);
-            if (roomsOnFloor.length > 0) {
-              let sumLat = 0, sumLng = 0, count = 0;
-              roomsOnFloor.forEach(r => {
-                r.latlngs.forEach(pt => {
-                  sumLat += pt[0];
-                  sumLng += pt[1];
-                  count++;
-                });
-              });
-              if (count > 0) {
-                centerLat = sumLat / count;
-                centerLng = sumLng / count;
-              }
-            }
-          }
-
-          // Shifting offset from Googleplex (37.4220, -122.0841) to local active layout center
-          const refLat = 37.4220;
-          const refLng = -122.0841;
-
-          // Adjust device coordinates for list display
-          if (message.devices) {
-            message.devices.forEach(device => {
-              const dLat = device.lat - refLat;
-              const dLng = device.lng - refLng;
-              device.lat = centerLat + dLat;
-              device.lng = centerLng + dLng;
-            });
-          }
-
-          // Adjust heatmap points coordinates
-          if (message.points) {
-            message.points = message.points.map(pt => {
-              const dLat = pt[0] - refLat;
-              const dLng = pt[1] - refLng;
-              return [centerLat + dLat, centerLng + dLng, pt[2]];
-            });
-          }
-
-          // Render heatmap coordinates
-          if (heatmapLayer && message.points) {
-            heatmapLayer.setLatLngs(message.points);
-          }
-          
-          // Update Devices directory UI
-          updateWifiDevicesUI(message.devices);
-        }
+        processWifiScannerMessage(message);
       } catch (err) {
         console.error('Error parsing WebSocket message:', err);
       }
@@ -1700,12 +1656,139 @@ function connectToWifiWS() {
   }
 }
 
+function processWifiScannerMessage(message) {
+  if (message.type !== 'wifi-heatmap') return;
+  
+  lastWifiScannerMessage = message;
+  
+  // Extract and update unique subnets
+  const subnets = {};
+  if (message.devices) {
+    message.devices.forEach(d => {
+      if (d.subnetPrefix) {
+        subnets[d.subnetPrefix] = d.interfaceName || `${d.subnetPrefix}x`;
+      }
+    });
+  }
+  updateSubnetFilterDropdown(subnets);
+  
+  // Filter devices and heatmap points
+  let filteredDevices = message.devices || [];
+  let filteredPoints = message.points || [];
+  
+  if (activeSubnetFilter !== 'all') {
+    filteredDevices = filteredDevices.filter(d => d.subnetPrefix === activeSubnetFilter);
+    
+    // Match points 1-to-1 with devices
+    const tempPoints = [];
+    (message.devices || []).forEach((d, idx) => {
+      if (d.subnetPrefix === activeSubnetFilter) {
+        tempPoints.push(message.points[idx]);
+      }
+    });
+    filteredPoints = tempPoints;
+  }
+  
+  // Determine local center (where active floor plan boundary or rooms are)
+  const activeBoundary = savedBoundaries.find(b => b.floor === activeFloor);
+  let centerLat = currentGpsCoords.lat;
+  let centerLng = currentGpsCoords.lng;
+
+  if (activeBoundary && activeBoundary.latlngs && activeBoundary.latlngs.length > 0) {
+    let sumLat = 0, sumLng = 0;
+    activeBoundary.latlngs.forEach(pt => {
+      sumLat += pt[0];
+      sumLng += pt[1];
+    });
+    centerLat = sumLat / activeBoundary.latlngs.length;
+    centerLng = sumLng / activeBoundary.latlngs.length;
+  } else {
+    const roomsOnFloor = savedRooms.filter(r => r.floor === activeFloor);
+    if (roomsOnFloor.length > 0) {
+      let sumLat = 0, sumLng = 0, count = 0;
+      roomsOnFloor.forEach(r => {
+        r.latlngs.forEach(pt => {
+          sumLat += pt[0];
+          sumLng += pt[1];
+          count++;
+        });
+      });
+      if (count > 0) {
+        centerLat = sumLat / count;
+        centerLng = sumLng / count;
+      }
+    }
+  }
+
+  // Shifting offset from Googleplex (37.4220, -122.0841) to local active layout center
+  const refLat = 37.4220;
+  const refLng = -122.0841;
+
+  // We map the filtered arrays to new objects/values so we don't mutate the cached lastWifiScannerMessage!
+  const renderedDevices = filteredDevices.map(device => {
+    const dLat = device.lat - refLat;
+    const dLng = device.lng - refLng;
+    return {
+      ...device,
+      lat: centerLat + dLat,
+      lng: centerLng + dLng
+    };
+  });
+
+  const renderedPoints = filteredPoints.map(pt => {
+    const dLat = pt[0] - refLat;
+    const dLng = pt[1] - refLng;
+    return [centerLat + dLat, centerLng + dLng, pt[2]];
+  });
+
+  // Render heatmap coordinates
+  if (heatmapLayer) {
+    heatmapLayer.setLatLngs(renderedPoints);
+  }
+  
+  // Update Devices directory UI
+  updateWifiDevicesUI(renderedDevices);
+}
+
+function updateSubnetFilterDropdown(subnets) {
+  if (!wifiNetworkFilter) return;
+  
+  // Get currently selected value
+  const currentValue = wifiNetworkFilter.value;
+  
+  // Clear all options except "all"
+  wifiNetworkFilter.innerHTML = '<option value="all">All Networks</option>';
+  
+  // Add new options
+  Object.keys(subnets).forEach(prefix => {
+    const option = document.createElement('option');
+    option.value = prefix;
+    option.textContent = subnets[prefix];
+    wifiNetworkFilter.appendChild(option);
+  });
+  
+  // Restore value if it still exists in the new list, otherwise fallback to 'all'
+  if (subnets[currentValue] || currentValue === 'all') {
+    wifiNetworkFilter.value = currentValue;
+    activeSubnetFilter = currentValue;
+  } else {
+    wifiNetworkFilter.value = 'all';
+    activeSubnetFilter = 'all';
+  }
+}
+
 function disconnectWifiWS() {
   if (wifiWebSocket) {
     wifiWebSocket.close();
     wifiWebSocket = null;
   }
   updateWifiWsStatus('disconnected');
+  
+  lastWifiScannerMessage = null;
+  activeSubnetFilter = 'all';
+  if (wifiNetworkFilter) {
+    wifiNetworkFilter.innerHTML = '<option value="all">All Networks</option>';
+  }
   
   if (wifiDevicesList) {
     wifiDevicesList.innerHTML = '<div style="font-size: 0.65rem; color: var(--text-muted); text-align: center; padding: 10px;">Waiting for scanner connection...</div>';
