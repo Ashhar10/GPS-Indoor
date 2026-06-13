@@ -138,7 +138,7 @@ wss.on('connection', (ws, req) => {
   clients.add(ws);
   console.log(`[WS] Client connected. Total: ${clients.size}`);
 
-  // Determine client's IP and subnet info
+  // Store the remote IP on the socket for later use
   let clientIp = req.socket.remoteAddress;
   if (req.headers['x-forwarded-for']) {
     clientIp = req.headers['x-forwarded-for'].split(',')[0].trim();
@@ -146,7 +146,9 @@ wss.on('connection', (ws, req) => {
   if (clientIp && clientIp.startsWith('::ffff:')) {
     clientIp = clientIp.substring(7);
   }
-  
+  ws.remoteIpAddress = clientIp;
+
+  // Send client-info only if connecting from a local/private IP (direct LAN connection)
   if (clientIp && /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/.test(clientIp)) {
     const clientSubnet = getSubnetPrefix(clientIp);
     const friendlyInterface = resolveInterfaceName(clientIp) || `Interface ${clientSubnet}x`;
@@ -156,7 +158,8 @@ wss.on('connection', (ws, req) => {
         type: 'client-info',
         ip: clientIp,
         subnetPrefix: clientSubnet,
-        interfaceName: friendlyInterface
+        interfaceName: friendlyInterface,
+        agentNetworks: getAgentNetworks()
       }));
     } catch (err) {
       console.error('[WS] Failed to send client-info:', err.message);
@@ -171,12 +174,13 @@ wss.on('connection', (ws, req) => {
         lastAgentScan = {
           devices: data.devices,
           points: data.points,
-          timestamp: Date.now()
+          timestamp: Date.now(),
+          agentIp: ws.remoteIpAddress
         };
         console.log(`[WS-Agent] Published local network scan: ${data.devices.length} devices.`);
         
         // Broadcast the real scanner data immediately to all web clients
-        broadcastPayload(data.devices, data.points, 'live');
+        broadcastPayload(data.devices, data.points, 'live', ws.remoteIpAddress);
       }
     } catch (err) {
       console.error('[WS] Error processing message:', err.message);
@@ -322,6 +326,24 @@ function resolveInterfaceName(ipAddress) {
   return null;
 }
 
+// Return all active local IPv4 subnet prefixes this machine is on
+function getAgentNetworks() {
+  const interfaces = os.networkInterfaces();
+  const networks = [];
+  for (const [name, addrs] of Object.entries(interfaces)) {
+    for (const addr of addrs) {
+      if (addr.family === 'IPv4' && !addr.internal) {
+        networks.push({
+          interfaceName: name,
+          ip: addr.address,
+          subnetPrefix: getSubnetPrefix(addr.address)
+        });
+      }
+    }
+  }
+  return networks;
+}
+
 // ─── Scan & Triangulate ───────────────────────────────────────────────
 function performScanAndTriangulate() {
   // If running on cloud, we rely on the local agent publishing data.
@@ -341,7 +363,7 @@ function performScanAndTriangulate() {
         points.push(result.point);
       });
 
-      broadcastPayload(devices, points, 'demo');
+      broadcastPayload(devices, points, 'demo', '127.0.0.1');
     }
     return;
   }
@@ -368,7 +390,7 @@ function performScanAndTriangulate() {
     });
 
     // Broadcast locally to local WebSocket clients (e.g. localhost page)
-    broadcastPayload(devices, points, 'live');
+    broadcastPayload(devices, points, 'live', '127.0.0.1');
 
     // Publish/Forward scans to remote Render WebSocket server
     if (remoteWs && remoteWs.readyState === 1) { // OPEN
@@ -381,12 +403,15 @@ function performScanAndTriangulate() {
   });
 }
 
-function broadcastPayload(devices, points, mode) {
+function broadcastPayload(devices, points, mode, agentIp) {
+  const agentNetworks = getAgentNetworks();
   const payload = JSON.stringify({
     type: 'wifi-heatmap',
     mode: mode,
     devices,
-    points
+    points,
+    agentIp: agentIp || '',
+    agentNetworks   // subnets the scanner PC is currently on
   });
   
   for (const client of clients) {

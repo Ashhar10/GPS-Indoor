@@ -1762,8 +1762,12 @@ function processWifiScannerMessage(message) {
   if (message.type !== 'wifi-heatmap') return;
   
   lastWifiScannerMessage = message;
-  
-  // Extract and update unique subnets
+
+  // Check if the scanner agent (PC) is on the same network as this client
+  const agentNetworks = message.agentNetworks || [];
+  const agentSubnetPrefixes = agentNetworks.map(n => n.subnetPrefix);
+
+  // Extract and update unique subnets from scan data
   const subnets = {};
   if (message.devices) {
     message.devices.forEach(d => {
@@ -1779,23 +1783,42 @@ function processWifiScannerMessage(message) {
     });
   }
   updateSubnetFilterDropdown(subnets);
-  
-  // Determine filter to use (respective auto-filter vs dropdown selection)
+
+  // ── Respective Network Filter Logic ──────────────────────────────────
   let filterToUse = activeSubnetFilter;
+
   if (wifiFilterRespective && wifiFilterRespective.checked) {
+    // Priority 1: We have a verified subnet from the local server client-info handshake
     if (detectedClientSubnetPrefix) {
       filterToUse = detectedClientSubnetPrefix;
     } else {
-      const subnetsList = Object.keys(subnets);
-      filterToUse = detectRespectiveSubnet(subnetsList);
+      // Priority 2: Guess from the scanned subnets list
+      filterToUse = detectRespectiveSubnet(Object.keys(subnets));
     }
+
+    // Sync dropdown to this filter
     if (wifiNetworkFilter && wifiNetworkFilter.value !== filterToUse) {
       wifiNetworkFilter.value = filterToUse;
       activeSubnetFilter = filterToUse;
       localStorage.setItem('mazemap_wifi_subnet_filter', filterToUse);
     }
+
+    // ── DIFFERENT NETWORK DETECTION ──────────────────────────────────
+    // If the client is on a different network than the scanner agent,
+    // there will be NO matching devices. Show a clear warning instead
+    // of silently showing all devices from the scanner's network.
+    if (filterToUse !== 'all' && agentSubnetPrefixes.length > 0) {
+      const clientOnAgentNetwork = agentSubnetPrefixes.includes(filterToUse);
+      if (!clientOnAgentNetwork) {
+        // Client is on a different network — show warning and stop
+        if (heatmapLayer) heatmapLayer.setLatLngs([]);
+        updateWifiDevicesUI([], 'different-network',
+          `Your device is on a different network (${filterToUse}x) than the scanner (${agentSubnetPrefixes.join(', ')}x). Connect to the same network as the scanner to see local devices.`);
+        return;
+      }
+    }
   }
-  
+
   // Filter devices and heatmap points
   let filteredDevices = message.devices || [];
   let filteredPoints = message.points || [];
@@ -1923,7 +1946,7 @@ function disconnectWifiWS() {
   }
 }
 
-function updateWifiDevicesUI(devices) {
+function updateWifiDevicesUI(devices, type, customMessage) {
   if (!wifiDevicesList) return;
   wifiDevicesList.innerHTML = '';
   
@@ -1932,7 +1955,11 @@ function updateWifiDevicesUI(devices) {
   }
   
   if (devices.length === 0) {
-    wifiDevicesList.innerHTML = '<div style="font-size: 0.65rem; color: var(--text-muted); text-align: center; padding: 10px;">Scanning network subnet... No active devices found.</div>';
+    const isDifferentNetwork = type === 'different-network';
+    const msg = customMessage || 'Scanning network subnet... No active devices found.';
+    const color = isDifferentNetwork ? '#f59e0b' : 'var(--text-muted)';
+    const icon = isDifferentNetwork ? '⚠️ ' : '';
+    wifiDevicesList.innerHTML = `<div style="font-size: 0.65rem; color: ${color}; text-align: center; padding: 10px; line-height: 1.5;">${icon}${msg}</div>`;
     return;
   }
   
