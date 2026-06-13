@@ -138,6 +138,32 @@ wss.on('connection', (ws, req) => {
   clients.add(ws);
   console.log(`[WS] Client connected. Total: ${clients.size}`);
 
+  // Determine client's IP and subnet info
+  let clientIp = req.socket.remoteAddress;
+  if (req.headers['x-forwarded-for']) {
+    clientIp = req.headers['x-forwarded-for'].split(',')[0].trim();
+  }
+  if (clientIp && clientIp.startsWith('::ffff:')) {
+    clientIp = clientIp.substring(7);
+  }
+  
+  if (clientIp && /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/.test(clientIp)) {
+    const clientSubnet = getSubnetPrefix(clientIp);
+    const friendlyInterface = resolveInterfaceName(clientIp) || `Interface ${clientSubnet}x`;
+    
+    try {
+      ws.send(JSON.stringify({
+        type: 'client-info',
+        ip: clientIp,
+        subnetPrefix: clientSubnet,
+        interfaceName: friendlyInterface
+      }));
+    } catch (err) {
+      console.error('[WS] Failed to send client-info:', err.message);
+    }
+  }
+
+
   ws.on('message', (messageText) => {
     try {
       const data = JSON.parse(messageText);
@@ -182,7 +208,7 @@ function rssiToDistance(rssi) {
   return Math.pow(10, (-30 - rssi) / (10 * 2.4));
 }
 
-function triangulateSingleDevice(ip, mac) {
+function triangulateSingleDevice(ip, mac, subnetPrefix, interfaceName) {
   const baseRssi1 = -35 - (hashString(mac + 'ap1') % 35);
   const baseRssi2 = -40 - (hashString(mac + 'ap2') % 35);
   const baseRssi3 = -45 - (hashString(mac + 'ap3') % 35);
@@ -207,37 +233,93 @@ function triangulateSingleDevice(ip, mac) {
   const intensity = Math.max(0.4, 2.0 - (maxDistance / 15.0));
 
   return {
-    device: { ip, mac, lat, lng, rssi: [rssi1, rssi2, rssi3] },
+    device: { ip, mac, lat, lng, rssi: [rssi1, rssi2, rssi3], subnetPrefix: subnetPrefix || '', interfaceName: interfaceName || '' },
     point: [lat, lng, intensity]
   };
 }
 
-// ─── ARP Parser (Cross-Platform) ──────────────────────────────────────
+// ─── ARP Parser (Cross-Platform) — Groups by Interface ────────────────
+function getSubnetPrefix(ip) {
+  const parts = ip.split('.');
+  return parts.slice(0, 3).join('.') + '.';
+}
+
 function parseArpOutput(stdout) {
   const results = [];
   const isWindows = os.platform() === 'win32';
 
   if (isWindows) {
-    const regex = /^\s*([0-9.]+)\s+([0-9a-fA-F-]+)\s+dynamic/gm;
-    let match;
-    while ((match = regex.exec(stdout)) !== null) {
-      const ip = match[1];
-      if (!ip.startsWith('224.') && !ip.startsWith('239.') && ip !== '255.255.255.255') {
-        results.push({ ip, mac: match[2] });
+    // Windows arp -a groups entries under "Interface: x.x.x.x --- 0xNN"
+    const lines = stdout.split('\n');
+    let currentInterfaceIp = '';
+    let currentInterfaceName = '';
+    let currentSubnetPrefix = '';
+
+    for (const line of lines) {
+      // Match interface header: "Interface: 192.168.88.80 --- 0xf"
+      const ifMatch = line.match(/^\s*Interface:\s*([0-9.]+)\s+---\s+0x([0-9a-fA-F]+)/);
+      if (ifMatch) {
+        currentInterfaceIp = ifMatch[1];
+        currentSubnetPrefix = getSubnetPrefix(currentInterfaceIp);
+        // Look up the friendly interface name from os.networkInterfaces()
+        currentInterfaceName = resolveInterfaceName(currentInterfaceIp) || `Net ${currentSubnetPrefix}x`;
+        continue;
+      }
+
+      // Match device row: "  192.168.88.1    18-fd-74-b3-8d-f8    dynamic"
+      const devMatch = line.match(/^\s*([0-9.]+)\s+([0-9a-fA-F-]+)\s+dynamic/);
+      if (devMatch) {
+        const ip = devMatch[1];
+        if (!ip.startsWith('224.') && !ip.startsWith('239.') && ip !== '255.255.255.255') {
+          results.push({
+            ip,
+            mac: devMatch[2],
+            subnetPrefix: currentSubnetPrefix,
+            interfaceName: currentInterfaceName
+          });
+        }
       }
     }
   } else {
-    const regex = /\(([0-9.]+)\)\s+at\s+([0-9a-fA-F:]+)/gm;
+    // Linux/Mac: "? (192.168.1.1) at aa:bb:cc:dd:ee:ff [ether] on eth0"
+    const regex = /\(([0-9.]+)\)\s+at\s+([0-9a-fA-F:]+)\s+.*on\s+(\S+)/gm;
     let match;
     while ((match = regex.exec(stdout)) !== null) {
       const ip = match[1];
       const mac = match[2].replace(/:/g, '-');
+      const iface = match[3];
       if (!ip.startsWith('224.') && !ip.startsWith('239.') && ip !== '255.255.255.255' && mac !== 'ff-ff-ff-ff-ff-ff') {
-        results.push({ ip, mac });
+        const prefix = getSubnetPrefix(ip);
+        results.push({ ip, mac, subnetPrefix: prefix, interfaceName: iface });
+      }
+    }
+    // Fallback if 'on <iface>' not present in output
+    if (results.length === 0) {
+      const fallbackRegex = /\(([0-9.]+)\)\s+at\s+([0-9a-fA-F:]+)/gm;
+      while ((match = fallbackRegex.exec(stdout)) !== null) {
+        const ip = match[1];
+        const mac = match[2].replace(/:/g, '-');
+        if (!ip.startsWith('224.') && !ip.startsWith('239.') && ip !== '255.255.255.255' && mac !== 'ff-ff-ff-ff-ff-ff') {
+          const prefix = getSubnetPrefix(ip);
+          results.push({ ip, mac, subnetPrefix: prefix, interfaceName: `Net ${prefix}x` });
+        }
       }
     }
   }
   return results;
+}
+
+// Resolve a friendly OS interface name from its IPv4 address
+function resolveInterfaceName(ipAddress) {
+  const interfaces = os.networkInterfaces();
+  for (const [name, addrs] of Object.entries(interfaces)) {
+    for (const addr of addrs) {
+      if (addr.family === 'IPv4' && addr.address === ipAddress) {
+        return name;
+      }
+    }
+  }
+  return null;
 }
 
 // ─── Scan & Triangulate ───────────────────────────────────────────────
@@ -254,7 +336,7 @@ function performScanAndTriangulate() {
       const points = [];
 
       activeDevices.forEach(d => {
-        const result = triangulateSingleDevice(d.ip, d.mac);
+        const result = triangulateSingleDevice(d.ip, d.mac, '192.168.1.', 'Demo Network');
         devices.push(result.device);
         points.push(result.point);
       });
@@ -271,7 +353,7 @@ function performScanAndTriangulate() {
     let parsed = [];
     if (error) {
       console.error('[Scan Error] ARP failed, falling back to simulated local devices:', error.message);
-      DEMO_DEVICES.slice(0, 4).forEach(d => parsed.push(d));
+      DEMO_DEVICES.slice(0, 4).forEach(d => parsed.push({ ...d, subnetPrefix: '192.168.1.', interfaceName: 'Fallback' }));
     } else {
       parsed = parseArpOutput(stdout);
     }
@@ -280,7 +362,7 @@ function performScanAndTriangulate() {
     const points = [];
 
     parsed.forEach(d => {
-      const result = triangulateSingleDevice(d.ip, d.mac);
+      const result = triangulateSingleDevice(d.ip, d.mac, d.subnetPrefix, d.interfaceName);
       devices.push(result.device);
       points.push(result.point);
     });

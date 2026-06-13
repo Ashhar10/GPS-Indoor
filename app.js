@@ -37,6 +37,7 @@ let wifiWebSocket = null;
 let wifiHeatmapPoints = [];
 let lastWifiScannerMessage = null;
 let activeSubnetFilter = 'all';
+let detectedClientSubnetPrefix = null;
 
 
 
@@ -1658,6 +1659,25 @@ function connectToWifiWS() {
       if (!isWifiScannerEnabled) return;
       try {
         const message = JSON.parse(event.data);
+        if (message.type === 'client-info') {
+          console.log('[WS] Received client info:', message);
+          if (message.subnetPrefix && isPrivateIp(message.ip)) {
+            detectedClientSubnetPrefix = message.subnetPrefix;
+            showToast(`Connected via local network: ${message.interfaceName || message.subnetPrefix + 'x'}`);
+            // If respective filter is checked, apply it immediately
+            if (wifiFilterRespective && wifiFilterRespective.checked) {
+              activeSubnetFilter = message.subnetPrefix;
+              if (wifiNetworkFilter) {
+                wifiNetworkFilter.value = message.subnetPrefix;
+              }
+              localStorage.setItem('mazemap_wifi_subnet_filter', message.subnetPrefix);
+              if (lastWifiScannerMessage) {
+                processWifiScannerMessage(lastWifiScannerMessage);
+              }
+            }
+          }
+          return;
+        }
         processWifiScannerMessage(message);
       } catch (err) {
         console.error('Error parsing WebSocket message:', err);
@@ -1683,6 +1703,15 @@ function connectToWifiWS() {
     console.error('WebSocket initialization error:', err);
     updateWifiWsStatus('disconnected');
   }
+}
+
+function isPrivateIp(ip) {
+  if (!ip) return false;
+  return ip.startsWith('192.168.') || 
+         ip.startsWith('10.') || 
+         ip.startsWith('127.') || 
+         ip.startsWith('::1') ||
+         (ip.startsWith('172.') && (parseInt(ip.split('.')[1], 10) >= 16 && parseInt(ip.split('.')[1], 10) <= 31));
 }
 
 function detectRespectiveSubnet(subnetsList) {
@@ -1723,7 +1752,13 @@ function processWifiScannerMessage(message) {
   if (message.devices) {
     message.devices.forEach(d => {
       if (d.subnetPrefix) {
-        subnets[d.subnetPrefix] = d.interfaceName || `${d.subnetPrefix}x`;
+        let displayName = d.interfaceName;
+        if (displayName && !displayName.includes(d.subnetPrefix)) {
+          displayName = `${displayName} (${d.subnetPrefix}x)`;
+        } else if (!displayName) {
+          displayName = `${d.subnetPrefix}x`;
+        }
+        subnets[d.subnetPrefix] = displayName;
       }
     });
   }
@@ -1732,8 +1767,12 @@ function processWifiScannerMessage(message) {
   // Determine filter to use (respective auto-filter vs dropdown selection)
   let filterToUse = activeSubnetFilter;
   if (wifiFilterRespective && wifiFilterRespective.checked) {
-    const subnetsList = Object.keys(subnets);
-    filterToUse = detectRespectiveSubnet(subnetsList);
+    if (detectedClientSubnetPrefix) {
+      filterToUse = detectedClientSubnetPrefix;
+    } else {
+      const subnetsList = Object.keys(subnets);
+      filterToUse = detectRespectiveSubnet(subnetsList);
+    }
     if (wifiNetworkFilter && wifiNetworkFilter.value !== filterToUse) {
       wifiNetworkFilter.value = filterToUse;
       activeSubnetFilter = filterToUse;
@@ -1855,6 +1894,7 @@ function disconnectWifiWS() {
   
   lastWifiScannerMessage = null;
   activeSubnetFilter = 'all';
+  detectedClientSubnetPrefix = null;
   if (wifiNetworkFilter) {
     wifiNetworkFilter.innerHTML = '<option value="all">All Networks</option>';
   }
