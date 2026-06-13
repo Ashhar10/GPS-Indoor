@@ -459,8 +459,13 @@ function setupUIEventListeners() {
 
   // WiFi Scanner Toggle Switch
   if (checkboxWifiScanner) {
+    const savedEnabled = localStorage.getItem('mazemap_wifi_scanner_enabled');
+    const shouldEnable = savedEnabled === null ? true : savedEnabled === 'true';
+    checkboxWifiScanner.checked = shouldEnable;
+
     checkboxWifiScanner.addEventListener('change', (e) => {
       isWifiScannerEnabled = e.target.checked;
+      localStorage.setItem('mazemap_wifi_scanner_enabled', isWifiScannerEnabled);
       if (isWifiScannerEnabled) {
         if (wifiScanHud) wifiScanHud.style.display = 'flex';
         if (wifiFilterRespectiveContainer) wifiFilterRespectiveContainer.style.display = 'block';
@@ -480,25 +485,22 @@ function setupUIEventListeners() {
 
   // WiFi Scanner IP Configuration Input
   if (wifiScannerIpInput) {
-    const savedIp = localStorage.getItem('mazemap_wifi_scanner_ip');
-    if (savedIp) {
-      wifiScannerIpInput.value = savedIp;
-    } else {
+    let savedIp = localStorage.getItem('mazemap_wifi_scanner_ip');
+    if (!savedIp) {
       const hostname = window.location.hostname;
       const isLocal = hostname === 'localhost' || hostname === '127.0.0.1' || hostname.startsWith('192.168.') || hostname.startsWith('10.') || hostname.startsWith('172.');
       const isVercel = hostname.endsWith('.vercel.app') || hostname.includes('vercel');
       
       if (isLocal) {
-        wifiScannerIpInput.value = hostname + ':8080';
+        savedIp = hostname + ':8080';
       } else if (isVercel) {
-        // Vercel cannot host WebSockets, so prompt the user to input their Render backend URL
-        wifiScannerIpInput.value = '';
-        wifiScannerIpInput.placeholder = 'your-backend.onrender.com';
+        savedIp = 'gps-indoor.onrender.com';
       } else {
-        // Default to the current hostname/port if loaded from a public domain (like Render)
-        wifiScannerIpInput.value = window.location.host;
+        savedIp = window.location.host;
       }
+      localStorage.setItem('mazemap_wifi_scanner_ip', savedIp);
     }
+    wifiScannerIpInput.value = savedIp;
 
     wifiScannerIpInput.addEventListener('change', () => {
       const value = wifiScannerIpInput.value.trim();
@@ -536,8 +538,10 @@ function setupUIEventListeners() {
 
   // WiFi Scanner Respective Network Filter Checkbox
   if (wifiFilterRespective) {
-    const savedRespective = localStorage.getItem('mazemap_wifi_filter_respective') === 'true';
-    wifiFilterRespective.checked = savedRespective;
+    const savedRespective = localStorage.getItem('mazemap_wifi_filter_respective');
+    const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+    const shouldCheckRespective = savedRespective === null ? isMobile : savedRespective === 'true';
+    wifiFilterRespective.checked = shouldCheckRespective;
     
     wifiFilterRespective.addEventListener('change', (e) => {
       localStorage.setItem('mazemap_wifi_filter_respective', e.target.checked);
@@ -551,6 +555,18 @@ function setupUIEventListeners() {
       }
     });
   }
+
+  // Auto-connect on page load if scanner is enabled
+  if (checkboxWifiScanner && checkboxWifiScanner.checked) {
+    setTimeout(() => {
+      isWifiScannerEnabled = true;
+      if (wifiScanHud) wifiScanHud.style.display = 'flex';
+      if (wifiFilterRespectiveContainer) wifiFilterRespectiveContainer.style.display = 'block';
+      initHeatmap();
+      connectToWifiWS();
+    }, 500);
+  }
+
 
   // Map drawing clicks listeners
   map.on('click', handleMapClick);
