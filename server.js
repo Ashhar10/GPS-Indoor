@@ -148,10 +148,11 @@ wss.on('connection', (ws, req) => {
   }
   ws.remoteIpAddress = clientIp;
 
-  // Send client-info only if connecting from a local/private IP (direct LAN connection)
-  if (clientIp && /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/.test(clientIp)) {
-    const clientSubnet = getSubnetPrefix(clientIp);
-    const friendlyInterface = resolveInterfaceName(clientIp) || `Interface ${clientSubnet}x`;
+  // Send client-info for all connected clients to let them resolve their networks.
+  if (clientIp) {
+    const isIpv4 = /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/.test(clientIp);
+    const clientSubnet = isIpv4 ? getSubnetPrefix(clientIp) : null;
+    const friendlyInterface = isIpv4 ? (resolveInterfaceName(clientIp) || `Interface ${clientSubnet}x`) : 'IPv6 Interface';
     
     try {
       ws.send(JSON.stringify({
@@ -174,6 +175,7 @@ wss.on('connection', (ws, req) => {
     try {
       const data = JSON.parse(messageText);
       if (data.type === 'publish-scan') {
+        ws.isAgent = true; // Mark this WebSocket connection as a scanner agent
         const agentId = ws.remoteIpAddress || 'unknown';
         activeAgents.set(agentId, {
           devices: data.devices,
@@ -200,7 +202,7 @@ wss.on('connection', (ws, req) => {
     console.log(`[WS] Client disconnected. Total: ${clients.size}`);
     
     // If this was an agent, remove it and notify others
-    if (ws.remoteIpAddress && activeAgents.has(ws.remoteIpAddress)) {
+    if (ws.isAgent && ws.remoteIpAddress && activeAgents.has(ws.remoteIpAddress)) {
       activeAgents.delete(ws.remoteIpAddress);
       broadcastAgentList();
     }
