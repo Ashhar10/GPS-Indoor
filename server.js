@@ -344,13 +344,20 @@ function resolveInterfaceName(ipAddress) {
 function getAgentNetworks() {
   const interfaces = os.networkInterfaces();
   const networks = [];
+  
+  let activeLocalIp = null;
+  if (remoteWs && remoteWs._socket) {
+    activeLocalIp = remoteWs._socket.localAddress;
+  }
+
   for (const [name, addrs] of Object.entries(interfaces)) {
     for (const addr of addrs) {
       if (addr.family === 'IPv4' && !addr.internal) {
         networks.push({
           interfaceName: name,
           ip: addr.address,
-          subnetPrefix: getSubnetPrefix(addr.address)
+          subnetPrefix: getSubnetPrefix(addr.address),
+          isActive: addr.address === activeLocalIp
         });
       }
     }

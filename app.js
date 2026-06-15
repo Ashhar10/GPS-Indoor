@@ -1731,6 +1731,7 @@ function connectToWifiWS() {
           activeAgents = message.agents || [];
           console.log('[WS] Received agent list:', activeAgents);
           updateSubnetFilterDropdown();
+          verifyLocalAgentsConnectivity();
           if (lastWifiScannerMessage) {
             processWifiScannerMessage(lastWifiScannerMessage);
           }
@@ -1759,10 +1760,29 @@ function connectToWifiWS() {
                 }
               } else {
                 // Public/Cloud IP connection
-                const matchingAgent = activeAgents.find(a => a.agentIp === window.clientIpAddress);
-                if (matchingAgent && matchingAgent.networks && matchingAgent.networks.length > 0) {
-                  const realSubnets = matchingAgent.networks.map(n => n.subnetPrefix).filter(s => s !== '192.168.1.');
-                  const detectedPrefix = realSubnets.length > 0 ? realSubnets[0] : matchingAgent.networks[0].subnetPrefix;
+                // 1. Try verified local connection first
+                let matchingAgent = null;
+                let detectedPrefix = null;
+                if (verifiedLocalSubnetPrefix && verifiedLocalAgentIp) {
+                  detectedPrefix = verifiedLocalSubnetPrefix;
+                  matchingAgent = activeAgents.find(a => a.agentIp === verifiedLocalAgentIp);
+                }
+                
+                // 2. Fallback to public IP matching
+                if (!matchingAgent) {
+                  matchingAgent = activeAgents.find(a => a.agentIp === window.clientIpAddress);
+                  if (matchingAgent && matchingAgent.networks && matchingAgent.networks.length > 0) {
+                    const activeNet = matchingAgent.networks.find(n => n.isActive);
+                    if (activeNet) {
+                      detectedPrefix = activeNet.subnetPrefix;
+                    } else {
+                      const realSubnets = matchingAgent.networks.map(n => n.subnetPrefix).filter(s => s !== '192.168.1.');
+                      detectedPrefix = realSubnets.length > 0 ? realSubnets[0] : matchingAgent.networks[0].subnetPrefix;
+                    }
+                  }
+                }
+                
+                if (detectedPrefix && matchingAgent) {
                   const newValue = `${matchingAgent.agentIp}|${detectedPrefix}`;
                   activeSubnetFilter = newValue;
                   if (wifiNetworkFilter) {
@@ -1821,7 +1841,40 @@ function isPrivateIp(ip) {
          (ip.startsWith('172.') && (parseInt(ip.split('.')[1], 10) >= 16 && parseInt(ip.split('.')[1], 10) <= 31));
 }
 
-// detectRespectiveSubnet was removed as precise matching is now performed based on client and agent IPs.
+// Global variables for verified local agent connection
+let verifiedLocalAgentIp = null;
+let verifiedLocalSubnetPrefix = null;
+
+function verifyLocalAgentsConnectivity() {
+  activeAgents.forEach(agent => {
+    (agent.networks || []).forEach(net => {
+      // Skip loopback and demo subnets
+      if (net.ip === '127.0.0.1' || net.subnetPrefix === '192.168.1.') return;
+      
+      const controller = new AbortController();
+      const id = setTimeout(() => controller.abort(), 1200);
+      
+      fetch(`http://${net.ip}:8080/health`, { signal: controller.signal })
+        .then(res => res.json())
+        .then(data => {
+          clearTimeout(id);
+          if (data && data.status === 'ok') {
+            console.log(`[Connectivity] Connected locally to agent at ${net.ip}`);
+            verifiedLocalAgentIp = agent.agentIp;
+            verifiedLocalSubnetPrefix = net.subnetPrefix;
+            
+            // Re-process message with the verified local network
+            if (lastWifiScannerMessage) {
+              processWifiScannerMessage(lastWifiScannerMessage);
+            }
+          }
+        })
+        .catch(err => {
+          clearTimeout(id);
+        });
+    });
+  });
+}
 
 function getActiveNetworkEntries() {
   const entries = [];
@@ -1891,12 +1944,27 @@ function processWifiScannerMessage(message) {
           matchingAgent = activeAgents.find(a => (a.networks || []).some(n => n.subnetPrefix === detectedPrefix));
         }
       } else {
-        // Public/Cloud connection: find agent with matching public IP (agentIp)
-        matchingAgent = activeAgents.find(a => a.agentIp === window.clientIpAddress);
-        if (matchingAgent && matchingAgent.networks && matchingAgent.networks.length > 0) {
-          // Find first non-demo subnet prefix of matching agent
-          const realSubnets = matchingAgent.networks.map(n => n.subnetPrefix).filter(s => s !== '192.168.1.');
-          detectedPrefix = realSubnets.length > 0 ? realSubnets[0] : matchingAgent.networks[0].subnetPrefix;
+        // Public/Cloud connection:
+        // 1. Try verified local connection first
+        if (verifiedLocalSubnetPrefix && verifiedLocalAgentIp) {
+          detectedPrefix = verifiedLocalSubnetPrefix;
+          matchingAgent = activeAgents.find(a => a.agentIp === verifiedLocalAgentIp);
+        }
+        
+        // 2. Fallback to public IP match (agentIp)
+        if (!matchingAgent) {
+          matchingAgent = activeAgents.find(a => a.agentIp === window.clientIpAddress);
+          if (matchingAgent && matchingAgent.networks && matchingAgent.networks.length > 0) {
+            // Priority: Find the network interface flagged as active first
+            const activeNet = matchingAgent.networks.find(n => n.isActive);
+            if (activeNet) {
+              detectedPrefix = activeNet.subnetPrefix;
+            } else {
+              // Fallback to first non-demo subnet prefix of matching agent
+              const realSubnets = matchingAgent.networks.map(n => n.subnetPrefix).filter(s => s !== '192.168.1.');
+              detectedPrefix = realSubnets.length > 0 ? realSubnets[0] : matchingAgent.networks[0].subnetPrefix;
+            }
+          }
         }
       }
     }
