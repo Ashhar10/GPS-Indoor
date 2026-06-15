@@ -447,12 +447,15 @@ function performScanAndTriangulate() {
 
     // Publish/Forward scans to remote Render WebSocket server
     if (remoteWs && remoteWs.readyState === 1) { // OPEN
+      console.log(`[Agent] Forwarding ${devices.length} scanned devices to Render backend...`);
       remoteWs.send(JSON.stringify({
         type: 'publish-scan',
         devices,
         points,
         agentNetworks: getAgentNetworks()
       }));
+    } else if (remoteWs) {
+      console.log(`[Agent] Cannot forward scans. Connection state: ${remoteWs.readyState}`);
     }
   });
 }
@@ -519,20 +522,23 @@ function connectToRemoteServer() {
   const WebSocket = require('ws');
   console.log(`[Agent] Connecting to Remote Server: ${REMOTE_WS_URL}`);
   
-  remoteWs = new WebSocket(REMOTE_WS_URL);
+  // Disable certificate validation if there are corporate proxies/firewalls
+  remoteWs = new WebSocket(REMOTE_WS_URL, {
+    rejectUnauthorized: false
+  });
   
   remoteWs.on('open', () => {
     console.log(`[Agent] Successfully connected to Render backend. Streaming local network scans...`);
   });
   
-  remoteWs.on('close', () => {
-    console.log(`[Agent] Disconnected from Render backend. Retrying in 5 seconds...`);
+  remoteWs.on('close', (code, reason) => {
+    console.log(`[Agent] Disconnected from Render backend (Code: ${code}, Reason: ${reason || 'None'}). Retrying in 5 seconds...`);
     remoteWs = null;
     setTimeout(connectToRemoteServer, 5000);
   });
   
   remoteWs.on('error', (err) => {
-    console.error(`[Agent] Connection error:`, err.message);
+    console.error(`[Agent] Connection error:`, err);
   });
 }
 
