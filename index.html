@@ -254,13 +254,208 @@
     </div>
   </div>
 
+      <div class="panel-section">
+        <h3>GPS Simulator</h3>
+        <p class="section-desc">Test proximity triggers by clicking on the map to move your simulated self.</p>
+        <label class="checkbox-container">
+          <input type="checkbox" id="toggle-simulator">
+          <span class="checkmark"></span>
+          <i class="fa-solid fa-shoe-prints"></i> Enable Walk Simulator
+        </label>
+        <div class="gps-status-card">
+          <div class="gps-coords">
+            <span>Lat: <strong id="val-lat">--</strong></span>
+            <span>Lng: <strong id="val-lng">--</strong></span>
+          </div>
+          <div class="active-room-display">
+            <span>Current Room:</span>
+            <div id="val-current-room" class="current-room-pill outside">Outside</div>
+          </div>
+        </div>
+      </div>
+      
+      <!-- Section 3: Indoor Navigation / Wayfinder -->
+      <div class="panel-section">
+        <h3>Indoor Navigation</h3>
+        <p class="section-desc">Find the shortest walkable path between doors on the active floor.</p>
+        <div class="gps-status-card" style="padding: 10px; gap: 8px;">
+          <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 0.8rem;">
+            <label for="nav-start" style="color: var(--text-secondary); width: 40px; font-weight: 500;">Start:</label>
+            <select id="nav-start" style="flex: 1; background: var(--bg-input); border: 1px solid var(--border-color); color: var(--text-primary); padding: 6px; border-radius: 6px; font-size: 0.75rem; font-family: inherit; outline: none;">
+              <option value="">-- Choose Start Room --</option>
+            </select>
+          </div>
+          <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 0.8rem; margin-top: 4px;">
+            <label for="nav-end" style="color: var(--text-secondary); width: 40px; font-weight: 500;">End:</label>
+            <select id="nav-end" style="flex: 1; background: var(--bg-input); border: 1px solid var(--border-color); color: var(--text-primary); padding: 6px; border-radius: 6px; font-size: 0.75rem; font-family: inherit; outline: none;">
+              <option value="">-- Choose Destination --</option>
+            </select>
+          </div>
+          <div style="display: flex; gap: 6px; margin-top: 8px;">
+            <button class="btn-action primary" id="btn-find-path" style="flex: 1; padding: 8px 12px; font-size: 0.75rem; display: flex; align-items: center; justify-content: center; gap: 6px;">
+              <i class="fa-solid fa-route"></i> Get Directions
+            </button>
+            <button class="btn-action" id="btn-clear-path" style="padding: 8px 10px; font-size: 0.75rem;" title="Clear Route">
+              <i class="fa-solid fa-arrows-spin"></i> Reset
+            </button>
+          </div>
+        </div>
+      </div>
+
+
+      <!-- Section 4: WiFi Subnet Device Scanner -->
+      <div class="panel-section" style="display: flex; flex-direction: column; gap: 8px;">
+        <h3>WiFi Subnet Device Scanner</h3>
+        <p class="section-desc">Track and triangulate dynamic devices connected to your LAN/WiFi network.</p>
+        <label class="checkbox-container">
+          <input type="checkbox" id="toggle-wifi-scanner">
+          <span class="checkmark"></span>
+          <i class="fa-solid fa-wifi" style="color: #60a5fa;"></i> Enable Subnet Scanner
+        </label>
+        
+        <label class="checkbox-container" id="wifi-filter-respective-container" style="display: none; margin-top: 4px;">
+          <input type="checkbox" id="wifi-filter-respective">
+          <span class="checkmark"></span>
+          <i class="fa-solid fa-filter" style="color: #10b981;"></i> Filter Respective Network Only
+        </label>
+        
+        <!-- Live Wifi Scan HUD -->
+        <div id="wifi-scan-hud" style="display: none; flex-direction: column; gap: 8px; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 8px;">
+          <div style="display: flex; align-items: center; justify-content: space-between; font-size: 0.75rem;">
+            <span style="color: var(--text-secondary); font-weight: 500;">Scanner Status:</span>
+            <span id="wifi-connection-status" class="ws-status-badge disconnected">
+              <span class="status-dot"></span> Disconnected
+            </span>
+          </div>
+          
+          <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 0.75rem;">
+            <span style="color: var(--text-secondary); font-weight: 500;">Server Address:</span>
+            <input type="text" id="wifi-scanner-ip" placeholder="127.0.0.1:8080" style="width: 150px; background: var(--bg-input); border: 1px solid var(--border-color); color: var(--text-primary); padding: 4px 8px; border-radius: 6px; font-size: 0.7rem; font-family: monospace; outline: none; text-align: right;">
+          </div>
+          
+          <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 0.75rem;">
+            <span style="color: var(--text-secondary); font-weight: 500;">Target Network:</span>
+            <select id="wifi-network-filter" style="width: 150px; background: var(--bg-input); border: 1px solid var(--border-color); color: var(--text-primary); padding: 4px 8px; border-radius: 6px; font-size: 0.7rem; outline: none; text-align: right;">
+              <option value="all">All Networks</option>
+            </select>
+          </div>
+          
+          <div style="font-size: 0.75rem; color: var(--text-secondary); font-weight: 600; margin-top: 4px; display: flex; align-items: center; justify-content: space-between;">
+            <span>Connected Devices:</span>
+            <span id="wifi-device-count" style="color: #60a5fa; font-weight: 700;">0 Devices</span>
+          </div>
+
+          <!-- Scrollable Connected WiFi Devices List -->
+          <div class="wifi-devices-list" id="wifi-devices-list" style="max-height: 150px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; margin-top: 4px; padding-right: 4px;">
+            <div style="font-size: 0.65rem; color: var(--text-muted); text-align: center; padding: 10px;">Waiting for scanner connection...</div>
+          </div>
+        </div>
+      </div>
+
+
+      <!-- Section 4: Saved Rooms List -->
+      <div class="panel-section" style="flex: 1; display: flex; flex-direction: column; overflow: hidden;">
+        <h3>Mapped Rooms Directory</h3>
+        <div class="rooms-list-container" id="rooms-list-container">
+          <ul class="rooms-list" id="saved-rooms-list">
+            <!-- Dynamic room directory cards inserted here -->
+            <li class="empty-list-placeholder">No rooms drawn yet. Use the Drawing Tools above to map your building!</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Fullscreen Leaflet Map Container -->
+  <div id="map"></div>
+
+  <!-- Floating Floor Selector widget (Right center of map) -->
+  <div class="floor-selector" id="floor-selector">
+    <div class="floor-selector-label"><i class="fa-solid fa-layer-group"></i> Floor</div>
+    <button class="floor-btn active" data-floor="1">F1</button>
+    <button class="floor-btn" data-floor="2">F2</button>
+    <button class="floor-btn" data-floor="3">F3</button>
+    <button class="floor-btn" data-floor="4">F4</button>
+    <button class="floor-btn" data-floor="5">F5</button>
+  </div>
+
+  <!-- Room Metadata Edit Modal Popup (Glassmorphic) -->
+  <div class="modal-overlay" id="room-modal">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h2>Save Mapped Room</h2>
+        <button class="modal-close" id="btn-modal-close"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label for="room-name-input">Room Name / Label</label>
+          <input type="text" id="room-name-input" placeholder="e.g. Living Room, Office 101, Server Rack">
+        </div>
+        <div class="form-group">
+          <label for="room-category-select">Category</label>
+          <select id="room-category-select">
+            <option value="office">Office</option>
+            <option value="lab">Research Lab</option>
+            <option value="conference">Conference Room</option>
+            <option value="classroom">Classroom</option>
+            <option value="restroom">Restroom</option>
+            <option value="hallway">Hallway / Corridor</option>
+            <option value="stairs">Stairs / Elevator</option>
+            <option value="other" selected>Other / Living Area</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="room-floor-select">Floor Level</label>
+          <select id="room-floor-select">
+            <option value="1" selected>Floor 1</option>
+            <option value="2">Floor 2</option>
+            <option value="3">Floor 3</option>
+            <option value="4">Floor 4</option>
+            <option value="5">Floor 5</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Doors (At least 1 required for navigation)</label>
+          <div style="display: flex; gap: 8px; align-items: center;">
+            <span id="modal-door-status" class="door-status-pill empty" style="font-size: 0.75rem; padding: 6px 10px; border-radius: 6px; background: rgba(239, 68, 68, 0.2); color: var(--danger); font-weight: 600; border: 1px solid rgba(239, 68, 68, 0.3);">0 Doors Placed</span>
+            <button class="btn-action" id="btn-modal-add-door" type="button" style="font-size: 0.75rem; padding: 6px 12px; flex: 1; display: flex; align-items: center; justify-content: center; gap: 6px;">
+              <i class="fa-solid fa-location-crosshairs"></i> Place Door on Map
+            </button>
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="room-desc-input">Description / Notes</label>
+          <textarea id="room-desc-input" rows="2" placeholder="Describe the space, room number, or contents..."></textarea>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-action" id="btn-modal-cancel">Cancel</button>
+        <button class="btn-action primary" id="btn-modal-save">Save Room</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- "Maze Map Done" Celebration Notification Overlay -->
+  <div class="success-overlay" id="success-overlay">
+    <div class="success-card">
+      <div class="success-icon-box">
+        <i class="fa-solid fa-circle-check"></i>
+      </div>
+      <div class="success-content">
+        <h4>Maze Map Done!</h4>
+        <p>You have entered: <strong id="success-room-name">Main Office</strong></p>
+      </div>
+      <button class="success-close" id="btn-success-close"><i class="fa-solid fa-xmark"></i></button>
+    </div>
+  </div>
+
   <!-- Floor/Map Style controls (Detailed map options selector) -->
   <div class="map-style-toggle">
     <button class="style-btn" id="btn-open-3d" title="Open 3D Floor View"><i class="fa-solid fa-cube"></i></button>
     <button class="style-btn" id="btn-style-dark" title="Dark Map Theme"><i class="fa-solid fa-moon"></i></button>
     <button class="style-btn" id="btn-style-google-street" title="Google Streets"><i class="fa-solid fa-map"></i></button>
-    <button class="style-btn active" id="btn-style-google-hybrid" title="Google Hybrid (Detailed Satellite)"><i class="fa-solid fa-earth-americas"></i></button>
-    <button class="style-btn" id="btn-style-osm" title="OpenStreetMap"><i class="fa-solid fa-road"></i></button>
+    <button class="style-btn" id="btn-style-google-hybrid" title="Google Hybrid (Detailed Satellite)"><i class="fa-solid fa-earth-americas"></i></button>
+    <button class="style-btn active" id="btn-style-osm" title="OpenStreetMap"><i class="fa-solid fa-road"></i></button>
   </div>
 
   <!-- 3D Floor Extrusion Viewer -->

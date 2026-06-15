@@ -11,7 +11,7 @@ let darkLayer;
 let googleStreetsLayer;
 let googleHybridLayer;
 let osmLayer;
-let activeTileStyle = 'google-hybrid';
+let activeTileStyle = 'osm';
 
 // Drawing Editor State
 let activeTool = 'select'; // 'select', 'boundary', 'room', 'wall', 'window', 'door', 'delete'
@@ -179,9 +179,9 @@ function initMap() {
     attribution: '© OpenStreetMap'
   });
 
-  // Start with Google Hybrid (high resolution satellite with labels) at zoom 19
+  // Start with OpenStreetMap at zoom 19
   map = L.map('map', {
-    layers: [googleHybridLayer],
+    layers: [osmLayer],
     zoomControl: false,
     maxZoom: 23
   }).setView([currentGpsCoords.lat, currentGpsCoords.lng], 19);
@@ -1796,8 +1796,15 @@ function connectToWifiWS() {
             if (!matched) {
               if (heatmapLayer) heatmapLayer.setLatLngs([]);
               const ipMsg = window.clientIpAddress ? ` (Your IP: ${window.clientIpAddress})` : '';
+              let agentMsg = '';
+              if (activeAgents.length > 0) {
+                const agentIps = activeAgents.map(a => a.agentIp).join(', ');
+                agentMsg = `<br/><span style="color: var(--text-muted); font-size: 0.6rem;">Connected agents found on other IPs: ${agentIps}</span>`;
+              } else {
+                agentMsg = `<br/><span style="color: var(--text-muted); font-size: 0.6rem;">(0 scanner agents connected to the server)</span>`;
+              }
               updateWifiDevicesUI([], 'different-network',
-                `No scanner agent detected on your network${ipMsg}. Please open the scanner on a PC connected to this network.`);
+                `No scanner agent detected on your network${ipMsg}. Please open the scanner on a PC connected to this network.${agentMsg}`);
             }
             if (lastWifiScannerMessage) {
               processWifiScannerMessage(lastWifiScannerMessage);
@@ -1981,8 +1988,15 @@ function processWifiScannerMessage(message) {
     } else {
       if (heatmapLayer) heatmapLayer.setLatLngs([]);
       const ipMsg = window.clientIpAddress ? ` (Your IP: ${window.clientIpAddress})` : '';
+      let agentMsg = '';
+      if (activeAgents.length > 0) {
+        const agentIps = activeAgents.map(a => a.agentIp).join(', ');
+        agentMsg = `<br/><span style="color: var(--text-muted); font-size: 0.6rem;">Connected agents found on other IPs: ${agentIps}</span>`;
+      } else {
+        agentMsg = `<br/><span style="color: var(--text-muted); font-size: 0.6rem;">(0 scanner agents connected to the server)</span>`;
+      }
       updateWifiDevicesUI([], 'different-network',
-        `No scanner agent detected on your network${ipMsg}. Please open the scanner on a PC connected to this network.`);
+        `No scanner agent detected on your network${ipMsg}. Please open the scanner on a PC connected to this network.${agentMsg}`);
       return;
     }
   }
