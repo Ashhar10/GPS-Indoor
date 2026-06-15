@@ -1793,16 +1793,11 @@ function connectToWifiWS() {
                 }
               }
             }
-            if (!matched) {
+            if (!matched && activeAgents.length > 0) {
               if (heatmapLayer) heatmapLayer.setLatLngs([]);
               const ipMsg = window.clientIpAddress ? ` (Your IP: ${window.clientIpAddress})` : '';
-              let agentMsg = '';
-              if (activeAgents.length > 0) {
-                const agentIps = activeAgents.map(a => a.agentIp).join(', ');
-                agentMsg = `<br/><span style="color: var(--text-muted); font-size: 0.6rem;">Connected agents found on other IPs: ${agentIps}</span>`;
-              } else {
-                agentMsg = `<br/><span style="color: var(--text-muted); font-size: 0.6rem;">(0 scanner agents connected to the server)</span>`;
-              }
+              const agentIps = activeAgents.map(a => a.agentIp).join(', ');
+              const agentMsg = `<br/><span style="color: var(--text-muted); font-size: 0.6rem;">Connected agents found on other IPs: ${agentIps}</span>`;
               updateWifiDevicesUI([], 'different-network',
                 `No scanner agent detected on your network${ipMsg}. Please open the scanner on a PC connected to this network.${agentMsg}`);
             }
@@ -1939,7 +1934,7 @@ function processWifiScannerMessage(message) {
     }
   }
 
-  if (wifiFilterRespective && wifiFilterRespective.checked) {
+  if (wifiFilterRespective && wifiFilterRespective.checked && message.mode !== 'demo') {
     let detectedPrefix = null;
     let matchingAgent = null;
 
