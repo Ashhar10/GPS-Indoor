@@ -503,12 +503,10 @@ function setupUIEventListeners() {
       localStorage.setItem('mazemap_wifi_scanner_enabled', isWifiScannerEnabled);
       if (isWifiScannerEnabled) {
         if (wifiScanHud) wifiScanHud.style.display = 'flex';
-        if (wifiFilterRespectiveContainer) wifiFilterRespectiveContainer.style.display = 'block';
         initHeatmap();
         connectToWifiWS();
       } else {
         if (wifiScanHud) wifiScanHud.style.display = 'none';
-        if (wifiFilterRespectiveContainer) wifiFilterRespectiveContainer.style.display = 'none';
         disconnectWifiWS();
         if (heatmapLayer) {
           map.removeLayer(heatmapLayer);
@@ -578,7 +576,6 @@ function setupUIEventListeners() {
     setTimeout(() => {
       isWifiScannerEnabled = true;
       if (wifiScanHud) wifiScanHud.style.display = 'flex';
-      if (wifiFilterRespectiveContainer) wifiFilterRespectiveContainer.style.display = 'block';
       initHeatmap();
       connectToWifiWS();
     }, 500);
