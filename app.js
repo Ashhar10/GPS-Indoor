@@ -1831,13 +1831,23 @@ function getActiveNetworkEntries() {
 
     (agent.networks || []).forEach(net => {
       const uniqueValue = `${agent.agentIp}|${net.subnetPrefix}`;
-      let displayName = net.interfaceName;
+      let displayName = net.interfaceName || '';
 
-      if (displayName && !displayName.includes(net.subnetPrefix)) {
-        displayName = `${displayName} (${net.subnetPrefix}x)`;
+      // Map raw OS interface names to user-friendly terms (WiFi/Ethernet/Hotspot)
+      const lower = displayName.toLowerCase();
+      if (lower.includes('wi-fi') || lower.includes('wifi') || lower.includes('wireless') || lower.includes('wlan')) {
+        displayName = 'WiFi Network';
+      } else if (lower.includes('ethernet')) {
+        displayName = 'WiFi / Ethernet Network';
+      } else if (lower.includes('tether') || lower.includes('ndis') || lower.includes('hotspot')) {
+        displayName = 'USB Tether / Hotspot';
+      } else if (lower.includes('loopback') || lower.includes('localhost')) {
+        displayName = 'Local Loopback';
       } else if (!displayName) {
-        displayName = `${net.subnetPrefix}x`;
+        displayName = 'WiFi / Local Network';
       }
+
+      displayName = `${displayName} (${net.subnetPrefix}x)`;
 
       entries.push({
         value: uniqueValue,
