@@ -559,11 +559,7 @@ function setupUIEventListeners() {
       localStorage.setItem('mazemap_wifi_subnet_filter', activeSubnetFilter);
       showToast(`Filtering to: ${e.target.options[e.target.selectedIndex].text}`);
       
-      // If the user manually changes the dropdown, disable the respective auto-filter checkbox
-      if (wifiFilterRespective && wifiFilterRespective.checked) {
-        wifiFilterRespective.checked = false;
-        localStorage.setItem('mazemap_wifi_filter_respective', false);
-      }
+      // (Respective filter is now automatic and immutable)
       
       // Clear current display to avoid showing old data from a different network
       if (heatmapLayer) heatmapLayer.setLatLngs([]);
@@ -575,25 +571,7 @@ function setupUIEventListeners() {
     });
   }
 
-  // WiFi Scanner Respective Network Filter Checkbox
-  if (wifiFilterRespective) {
-    const savedRespective = localStorage.getItem('mazemap_wifi_filter_respective');
-    const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-    const shouldCheckRespective = savedRespective === null ? isMobile : savedRespective === 'true';
-    wifiFilterRespective.checked = shouldCheckRespective;
-    
-    wifiFilterRespective.addEventListener('change', (e) => {
-      localStorage.setItem('mazemap_wifi_filter_respective', e.target.checked);
-      if (e.target.checked) {
-        showToast('Auto-filtering to your respective network...');
-      } else {
-        showToast('Respective network filter disabled. Showing selected dropdown network.');
-      }
-      if (lastWifiScannerMessage) {
-        processWifiScannerMessage(lastWifiScannerMessage);
-      }
-    });
-  }
+  // WiFi Scanner Respective Network Filter logic is now fully automatic
 
   // Auto-connect on page load if scanner is enabled
   if (checkboxWifiScanner && checkboxWifiScanner.checked) {
