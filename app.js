@@ -1731,16 +1731,22 @@ function connectToWifiWS() {
           activeAgents = message.agents || [];
           console.log('[WS] Received agent list:', activeAgents);
           updateSubnetFilterDropdown();
+          if (lastWifiScannerMessage) {
+            processWifiScannerMessage(lastWifiScannerMessage);
+          }
           return;
         }
         if (message.type === 'client-info') {
           console.log('[WS] Received client info:', message);
+          window.clientIpAddress = message.ip;
           if (message.subnetPrefix && isPrivateIp(message.ip)) {
             detectedClientSubnetPrefix = message.subnetPrefix;
             showToast(`Connected via local network: ${message.interfaceName || message.subnetPrefix + 'x'}`);
-            // If respective filter is checked, apply it immediately
-            if (wifiFilterRespective && wifiFilterRespective.checked) {
-              const matchingValue = findNetworkOptionValueBySubnet(message.subnetPrefix);
+          }
+          // If respective filter is checked, apply it immediately
+          if (wifiFilterRespective && wifiFilterRespective.checked) {
+            if (window.clientIpAddress && isPrivateIp(window.clientIpAddress)) {
+              const matchingValue = findNetworkOptionValueBySubnet(detectedClientSubnetPrefix);
               if (matchingValue) {
                 activeSubnetFilter = matchingValue;
                 if (wifiNetworkFilter) {
@@ -1750,11 +1756,11 @@ function connectToWifiWS() {
               } else {
                 if (heatmapLayer) heatmapLayer.setLatLngs([]);
                 updateWifiDevicesUI([], 'different-network',
-                  `Your phone is on ${message.subnetPrefix}x, but no scanner agent is publishing that WiFi yet. Open the scanner on a PC inside this network.`);
+                  `Your phone is on ${detectedClientSubnetPrefix}x, but no scanner agent is publishing that WiFi yet. Open the scanner on a PC inside this network.`);
               }
-              if (lastWifiScannerMessage) {
-                processWifiScannerMessage(lastWifiScannerMessage);
-              }
+            }
+            if (lastWifiScannerMessage) {
+              processWifiScannerMessage(lastWifiScannerMessage);
             }
           }
           return;
@@ -1795,33 +1801,7 @@ function isPrivateIp(ip) {
          (ip.startsWith('172.') && (parseInt(ip.split('.')[1], 10) >= 16 && parseInt(ip.split('.')[1], 10) <= 31));
 }
 
-function detectRespectiveSubnet(subnetsList) {
-  if (subnetsList.length === 0) return 'all';
-  
-  // 1. Check for standard mobile hotspots
-  const hotspots = ['192.168.43.', '172.20.10.', '192.168.137.'];
-  for (const prefix of hotspots) {
-    if (subnetsList.includes(prefix)) {
-      return prefix;
-    }
-  }
-
-  // 2. If we are on mobile, and there is only one non-demo subnet, select it
-  const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-  const realSubnets = subnetsList.filter(s => s !== '192.168.1.'); // 192.168.1. is our Demo subnet
-  if (isMobile && realSubnets.length === 1) {
-    return realSubnets[0];
-  }
-
-  // 3. Return the first non-virtual, non-demo subnet
-  for (const s of realSubnets) {
-    if (!s.startsWith('192.168.56.') && !s.startsWith('192.168.99.')) {
-      return s;
-    }
-  }
-
-  return subnetsList[0];
-}
+// detectRespectiveSubnet was removed as precise matching is now performed based on client and agent IPs.
 
 function getActiveNetworkEntries() {
   const entries = [];
@@ -1880,33 +1860,42 @@ function processWifiScannerMessage(message) {
   }
 
   if (wifiFilterRespective && wifiFilterRespective.checked) {
-    // Priority 1: We have a verified subnet from the local server client-info handshake
-    let detectedPrefix = detectedClientSubnetPrefix;
-    if (!detectedPrefix) {
-      // Priority 2: Guess from the scanned subnets list of all active agents
-      const allAvailableSubnets = [];
-      activeAgents.forEach(a => (a.networks || []).forEach(n => allAvailableSubnets.push(n.subnetPrefix)));
-      detectedPrefix = detectRespectiveSubnet(allAvailableSubnets);
+    let detectedPrefix = null;
+    let matchingAgent = null;
+
+    if (window.clientIpAddress) {
+      if (isPrivateIp(window.clientIpAddress)) {
+        // Direct local connection
+        detectedPrefix = detectedClientSubnetPrefix;
+        if (detectedPrefix) {
+          matchingAgent = activeAgents.find(a => (a.networks || []).some(n => n.subnetPrefix === detectedPrefix));
+        }
+      } else {
+        // Public/Cloud connection: find agent with matching public IP
+        matchingAgent = activeAgents.find(a => a.agentIp === window.clientIpAddress);
+        if (matchingAgent && matchingAgent.networks && matchingAgent.networks.length > 0) {
+          // Find first non-demo subnet prefix of matching agent
+          const realSubnets = matchingAgent.networks.map(n => n.subnetPrefix).filter(s => s !== '192.168.1.');
+          detectedPrefix = realSubnets.length > 0 ? realSubnets[0] : matchingAgent.networks[0].subnetPrefix;
+        }
+      }
     }
 
-    if (detectedPrefix && detectedPrefix !== 'all') {
-      // Find the agent that is scanning this prefix
-      const matchingAgent = activeAgents.find(a => (a.networks || []).some(n => n.subnetPrefix === detectedPrefix));
-      if (matchingAgent) {
-        const newValue = `${matchingAgent.agentIp}|${detectedPrefix}`;
-        if (wifiNetworkFilter && wifiNetworkFilter.value !== newValue) {
-          wifiNetworkFilter.value = newValue;
-          activeSubnetFilter = newValue;
-          localStorage.setItem('mazemap_wifi_subnet_filter', newValue);
-        }
-        targetAgentIp = matchingAgent.agentIp;
-        targetSubnetPrefix = detectedPrefix;
-      } else {
-        if (heatmapLayer) heatmapLayer.setLatLngs([]);
-        updateWifiDevicesUI([], 'different-network',
-          `Your phone is on ${detectedPrefix}x, but no scanner agent is publishing that WiFi yet. A mobile browser cannot scan the LAN by itself.`);
-        return;
+    if (detectedPrefix && matchingAgent) {
+      const newValue = `${matchingAgent.agentIp}|${detectedPrefix}`;
+      if (wifiNetworkFilter && wifiNetworkFilter.value !== newValue) {
+        wifiNetworkFilter.value = newValue;
+        activeSubnetFilter = newValue;
+        localStorage.setItem('mazemap_wifi_subnet_filter', newValue);
       }
+      targetAgentIp = matchingAgent.agentIp;
+      targetSubnetPrefix = detectedPrefix;
+    } else {
+      if (heatmapLayer) heatmapLayer.setLatLngs([]);
+      const ipMsg = window.clientIpAddress ? ` (Your IP: ${window.clientIpAddress})` : '';
+      updateWifiDevicesUI([], 'different-network',
+        `No scanner agent detected on your network${ipMsg}. Please open the scanner on a PC connected to this network.`);
+      return;
     }
   }
 
